@@ -89,7 +89,8 @@ python -m unittest discover -s 07_SCRIPTS/tests
 ```
 
 La CI GitHub (`.github/workflows/checks.yml`) lance les tests, valide les seeds et
-chaque lot de `05_OUTPUTS/batch_*/`, et vérifie que les fichiers assemblés sont à jour.
+chaque lot assemblé de `05_OUTPUTS/batch_*/`, et vérifie que les fichiers assemblés
+sont à jour. Un lot sans `tasks.jsonl` est considéré en cours de rédaction et ignoré.
 
 ## Lots générés
 
