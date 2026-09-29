@@ -102,6 +102,11 @@ générés à la racine de `05_OUTPUTS/` restent locaux.
   adversarial) puis par une critique de lot. Produit localement mais **absent du
   dépôt** (il était exclu par `.gitignore`) : le copier dans
   `05_OUTPUTS/batch_001/` pour le versionner.
+- `batch_002` : 20 tâches (12 Problem Solving / 8 Machine Learning) générées avec
+  `--against 05_OUTPUTS` sur la taxonomie enrichie, rédigées par six rédacteurs,
+  relues par des relecteurs indépendants (réalisme chiffré, Quality Gate, solveur
+  adversarial) puis par une critique de lot : voir `05_OUTPUTS/batch_002/REVIEW.md`.
+  Lecture : `tasks.md` ; données : `tasks.jsonl`.
 
 ## Structure
 
