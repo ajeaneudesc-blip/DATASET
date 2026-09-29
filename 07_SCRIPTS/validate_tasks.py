@@ -4,10 +4,11 @@
 Exemples :
   python 07_SCRIPTS/validate_tasks.py --kind seed 04_SEEDS/seed_tasks.jsonl
   python 07_SCRIPTS/validate_tasks.py --kind card 05_OUTPUTS/generated_cards.jsonl
-  python 07_SCRIPTS/validate_tasks.py --kind task 05_OUTPUTS/batch_001/tasks
-  python 07_SCRIPTS/validate_tasks.py --kind task --single 05_OUTPUTS/batch_001/tasks/B001-T001.json
+  python 07_SCRIPTS/validate_tasks.py --kind task 05_OUTPUTS/batch_002/tasks --against 05_OUTPUTS
+  python 07_SCRIPTS/validate_tasks.py --kind task --single 05_OUTPUTS/batch_002/tasks/B002-T001.json
 
 Entrée : fichier .jsonl, fichier .json (objet ou liste) ou dossier de .json.
+--against <dossier> compare aussi aux tâches des autres lots <dossier>/batch_*/tasks/.
 Code retour 1 s'il y a au moins une erreur.
 """
 import argparse
@@ -24,7 +25,9 @@ from taxonomy import (
     TRACKS,
     Taxonomy,
     constraint_label,
+    dataset_items,
     dimension_diff,
+    load_items,
     utf8_stdout,
 )
 
@@ -42,6 +45,9 @@ METADATA_BOOLS = (
     "solution_included",
 )
 MIN_CONSTRAINTS = 3
+# Texte comparé entre tâches pour repérer les quasi-reformulations.
+SIMILARITY_FIELDS = ("context", "existing_architecture", "problem")
+SHINGLE_WORDS = 5
 
 # Heuristiques de fuite : signalées en avertissement, à confirmer à la relecture.
 LEAK_PATTERNS = [
@@ -49,6 +55,8 @@ LEAK_PATTERNS = [
     (r"la cause racine (est|était)|root cause (is|was)", "cause racine possiblement révélée"),
     (r"la (bonne )?solution (est|consiste)|the (fix|solution) is", "solution possiblement donnée"),
 ]
+
+DEFAULTS = {"single": False, "ps_ratio": 0.6, "ratio_tolerance": 0.05, "min_diff": 4, "sim_threshold": 0.25}
 
 
 class Report:
@@ -61,19 +69,6 @@ class Report:
 
     def warn(self, where, msg):
         self.warnings.append(f"WARN  [{where}] {msg}")
-
-
-def load_items(path):
-    path = Path(path)
-    if path.is_dir():
-        files = sorted(path.glob("*.json"))
-        return [(f.name, json.loads(f.read_text(encoding="utf-8"))) for f in files]
-    text = path.read_text(encoding="utf-8")
-    if path.suffix == ".jsonl":
-        return [(f"{path.name}:{n}", json.loads(line)) for n, line in enumerate(text.splitlines(), 1) if line.strip()]
-    data = json.loads(text)
-    items = data if isinstance(data, list) else [data]
-    return [(f"{path.name}[{n}]", item) for n, item in enumerate(items)]
 
 
 def normalize(text):
@@ -89,6 +84,15 @@ def all_text(value):
     if isinstance(value, dict):
         return "\n".join(all_text(v) for v in value.values())
     return ""
+
+
+def shingles(item):
+    words = normalize(" ".join(all_text(item.get(f, "")) for f in SIMILARITY_FIELDS)).split()
+    return {tuple(words[i:i + SHINGLE_WORDS]) for i in range(len(words) - SHINGLE_WORDS + 1)}
+
+
+def jaccard(a, b):
+    return len(a & b) / len(a | b) if a and b else 0.0
 
 
 def check_axes(item, where, tax, rep):
@@ -185,31 +189,70 @@ def check_item(item, where, kind, tax, rep):
         check_task_body(item, where, rep)
 
 
-def check_batch(items, kind, args, rep):
-    ids = [item.get("task_id") for _, item in items]
-    for task_id in {i for i in ids if ids.count(i) > 1}:
+def check_pairs(pairs, kind, opts, rep, scope):
+    """Diversité et doublons pour chaque paire (a, b) ; `scope` préfixe les messages."""
+    text_key = {"seed": "theme", "task": "title"}.get(kind)
+    cache = {}
+
+    def shingles_of(item):
+        if id(item) not in cache:
+            cache[id(item)] = shingles(item)
+        return cache[id(item)]
+
+    for a, b in pairs:
+        ida, idb = a.get("task_id"), b.get("task_id")
+        diff = dimension_diff(a, b)
+        if diff < opts["min_diff"]:
+            rep.error(scope, f"{ida} et {idb} ne diffèrent que sur {diff} axe(s) (min {opts['min_diff']})")
+        if text_key:
+            key = normalize(str(a.get(text_key, "")))
+            if key and key == normalize(str(b.get(text_key, ""))):
+                rep.error(scope, f"{text_key} dupliqué : {ida} et {idb}")
+        if kind == "task":
+            sim = jaccard(shingles_of(a), shingles_of(b))
+            if sim >= opts["sim_threshold"]:
+                rep.warn(scope, f"{ida} et {idb} : textes très proches (similarité {sim:.2f}), reformulation probable")
+
+
+def check_batch(items, kind, opts, rep, previous=()):
+    ids = [item.get("task_id") for item in items]
+    for task_id in sorted({i for i in ids if ids.count(i) > 1}, key=str):
         rep.error("lot", f"task_id dupliqué : {task_id}")
 
     n = len(items)
-    n_ps = sum(item.get("track") == "problem_solving" for _, item in items)
+    n_ps = sum(item.get("track") == "problem_solving" for item in items)
     if n:
         ratio = n_ps / n
-        if abs(ratio - args.ps_ratio) > args.ratio_tolerance:
-            rep.error("lot", f"répartition PS/ML {n_ps}/{n - n_ps} ({ratio:.0%} PS), cible {args.ps_ratio:.0%} ± {args.ratio_tolerance:.0%}")
+        if abs(ratio - opts["ps_ratio"]) > opts["ratio_tolerance"]:
+            rep.error(
+                "lot",
+                f"répartition PS/ML {n_ps}/{n - n_ps} ({ratio:.0%} PS), "
+                f"cible {opts['ps_ratio']:.0%} ± {opts['ratio_tolerance']:.0%}",
+            )
+    check_pairs(combinations(items, 2), kind, opts, rep, "lot")
 
-    for (wa, a), (wb, b) in combinations(items, 2):
-        diff = dimension_diff(a, b)
-        if diff < args.min_diff:
-            rep.error("lot", f"{a.get('task_id')} et {b.get('task_id')} ne diffèrent que sur {diff} axe(s) (min {args.min_diff})")
+    if previous:
+        known = {item.get("task_id"): where for where, item in previous}
+        for item in items:
+            if item.get("task_id") in known:
+                rep.error("dataset", f"task_id {item.get('task_id')} déjà utilisé ({known[item.get('task_id')]})")
+        check_pairs(((a, b) for a in items for _, b in previous), kind, opts, rep, "dataset")
 
-    text_key = {"seed": "theme", "task": "title"}.get(kind)
-    if text_key:
-        seen = {}
-        for _, item in items:
-            key = normalize(str(item.get(text_key, "")))
-            if key and key in seen:
-                rep.error("lot", f"{text_key} dupliqué : {item.get('task_id')} et {seen[key]}")
-            seen.setdefault(key, item.get("task_id"))
+
+def validate(items, kind, previous=(), **options):
+    """Valide une liste de (où, élément) ; `previous` = éléments des autres lots. Renvoie un Report."""
+    opts = {**DEFAULTS, **options}
+    tax = Taxonomy()
+    rep = Report()
+    for msg in tax.self_check():
+        rep.error("taxonomie", msg)
+    for where, item in items:
+        label = item.get("task_id", where) if isinstance(item, dict) else where
+        check_item(item, label, kind, tax, rep)
+    if not opts["single"]:
+        dicts = [item for _, item in items if isinstance(item, dict)]
+        check_batch(dicts, kind, opts, rep, [(w, i) for w, i in previous if isinstance(i, dict)])
+    return rep
 
 
 def main():
@@ -218,32 +261,36 @@ def main():
     p.add_argument("path")
     p.add_argument("--kind", choices=("seed", "card", "task"), required=True)
     p.add_argument("--single", action="store_true", help="ignore les contrôles de lot (ratio, diversité, doublons)")
-    p.add_argument("--ps-ratio", type=float, default=0.6)
-    p.add_argument("--ratio-tolerance", type=float, default=0.05)
-    p.add_argument("--min-diff", type=int, default=4)
+    p.add_argument("--against", metavar="DOSSIER", help="compare aussi aux lots <DOSSIER>/batch_*/tasks/")
+    p.add_argument("--ps-ratio", type=float, default=DEFAULTS["ps_ratio"])
+    p.add_argument("--ratio-tolerance", type=float, default=DEFAULTS["ratio_tolerance"])
+    p.add_argument("--min-diff", type=int, default=DEFAULTS["min_diff"])
+    p.add_argument("--sim-threshold", type=float, default=DEFAULTS["sim_threshold"],
+                   help="similarité textuelle (0-1) à partir de laquelle deux tâches sont signalées")
     args = p.parse_args()
-
-    tax = Taxonomy()
-    rep = Report()
-    for msg in tax.self_check():
-        rep.error("taxonomie", msg)
 
     try:
         items = load_items(args.path)
+        previous = dataset_items(args.against, exclude=args.path) if args.against else []
     except (OSError, json.JSONDecodeError) as exc:
-        sys.exit(f"Lecture impossible de {args.path} : {exc}")
+        sys.exit(f"Lecture impossible : {exc}")
 
-    for where, item in items:
-        label = item.get("task_id", where) if isinstance(item, dict) else where
-        check_item(item, label, args.kind, tax, rep)
-    if not args.single:
-        check_batch([(w, i) for w, i in items if isinstance(i, dict)], args.kind, args, rep)
-
+    rep = validate(
+        items,
+        args.kind,
+        previous,
+        single=args.single,
+        ps_ratio=args.ps_ratio,
+        ratio_tolerance=args.ratio_tolerance,
+        min_diff=args.min_diff,
+        sim_threshold=args.sim_threshold,
+    )
     for line in rep.errors + rep.warnings:
         print(line)
     n_ps = sum(isinstance(i, dict) and i.get("track") == "problem_solving" for _, i in items)
+    against = f" — comparé à {len(previous)} tâche(s) d'autres lots" if args.against else ""
     print(
-        f"\n{len(items)} élément(s) — {n_ps} Problem Solving / {len(items) - n_ps} Machine Learning — "
+        f"\n{len(items)} élément(s) — {n_ps} Problem Solving / {len(items) - n_ps} Machine Learning{against} — "
         f"{len(rep.errors)} erreur(s), {len(rep.warnings)} avertissement(s)"
     )
     sys.exit(1 if rep.errors else 0)

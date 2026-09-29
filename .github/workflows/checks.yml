@@ -1,0 +1,27 @@
+name: checks
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  checks:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Tests des scripts
+        run: python -m unittest discover -s 07_SCRIPTS/tests -v
+      - name: Seeds
+        run: python 07_SCRIPTS/validate_tasks.py --kind seed 04_SEEDS/seed_tasks.jsonl
+      - name: Lots (validation + fichiers assemblés à jour)
+        run: |
+          shopt -s nullglob
+          for batch in 05_OUTPUTS/batch_*/; do
+            echo "::group::${batch}"
+            python 07_SCRIPTS/validate_tasks.py --kind task "${batch}tasks" --against 05_OUTPUTS
+            python 07_SCRIPTS/assemble_batch.py --check "${batch%/}"
+            echo "::endgroup::"
+          done

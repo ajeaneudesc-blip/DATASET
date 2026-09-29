@@ -5,7 +5,9 @@ Aucun appel réseau. Garanties :
 - répartition exacte Problem Solving / Machine Learning (--ps-ratio, 0.6 par défaut) ;
 - chaque axe est tiré parmi les valeurs les moins utilisées du lot (couverture maximale) ;
 - règles de cohérence de 02_TAXONOMY/compatibility.json ;
-- chaque fiche diffère d'au moins --min-diff axes de toutes les fiches précédentes.
+- chaque fiche diffère d'au moins --min-diff axes de toutes les fiches précédentes ;
+- avec --against <dossier>, les tâches des lots existants comptent dans l'équilibrage
+  et dans l'écart minimal (couverture et diversité à l'échelle du dataset).
 
 Sorties : generated_prompts.md (à copier dans Claude) et generated_cards.jsonl (machine).
 """
@@ -16,45 +18,68 @@ import sys
 from collections import Counter
 from pathlib import Path
 
-from taxonomy import BASE, DIMENSIONS, TRACK_LABEL, Taxonomy, dimension_diff, utf8_stdout
+from taxonomy import (
+    BASE,
+    DIMENSIONS,
+    TRACK_LABEL,
+    Taxonomy,
+    constraint_label,
+    dataset_items,
+    dimension_diff,
+    load_config,
+    utf8_stdout,
+)
 
 MAX_ATTEMPTS = 2000
+# Après chaque tranche d'essais infructueux, on accepte des valeurs un peu plus utilisées.
+SLACK_EVERY = 200
 CONSTRAINTS_PER_TASK = 3
 
 
-def least_used(rng, pool, usage):
+def least_used(rng, pool, usage, slack=0):
     low = min(usage[x] for x in pool)
-    return rng.choice([x for x in pool if usage[x] == low])
+    return rng.choice([x for x in pool if usage[x] <= low + slack])
 
 
-def draw_card(rng, tax, track, usage):
-    domain = least_used(rng, tax.domains[track], usage["domain"])
+def record_usage(usage, item):
+    for key in usage:
+        if key == "constraints":
+            usage[key].update(constraint_label(c) for c in item.get("constraints", []))
+        else:
+            usage[key][item.get(key)] += 1
+
+
+def draw_card(rng, tax, track, usage, slack=0):
+    def pick(pool, key):
+        return least_used(rng, pool, usage[key], slack)
+
+    domain = pick(tax.domains[track], "domain")
 
     languages = [l for l in tax.languages if tax.language_ok(l, domain)]
     pref = tax.language_preference.get(track)
     if pref and pref["language"] in languages and rng.random() < pref["probability"]:
         language = pref["language"]
     else:
-        language = least_used(rng, languages, usage["language"])
+        language = pick(languages, "language")
 
     incidents = [i for i in tax.incidents if tax.incident_ok(i, track, language)]
     pool = list(tax.constraints)
     constraints = []
     for _ in range(CONSTRAINTS_PER_TASK):
-        c = least_used(rng, pool, usage["constraints"])
+        c = pick(pool, "constraints")
         constraints.append(c)
         pool.remove(c)
 
     return {
         "track": track,
         "domain": domain,
-        "subtype": least_used(rng, tax.subtypes[track], usage["subtype"]),
+        "subtype": pick(tax.subtypes[track], "subtype"),
         "language": language,
-        "load_level": least_used(rng, list(tax.loads), usage["load_level"]),
-        "architecture_style": least_used(rng, tax.architectures, usage["architecture_style"]),
-        "incident_type": least_used(rng, incidents, usage["incident_type"]),
-        "failure_mode": least_used(rng, tax.failures, usage["failure_mode"]),
-        "task_mode": least_used(rng, tax.modes, usage["task_mode"]),
+        "load_level": pick(list(tax.loads), "load_level"),
+        "architecture_style": pick(tax.architectures, "architecture_style"),
+        "incident_type": pick(incidents, "incident_type"),
+        "failure_mode": pick(tax.failures, "failure_mode"),
+        "task_mode": pick(tax.modes, "task_mode"),
         "constraints": constraints,
     }
 
@@ -85,12 +110,13 @@ def render_card(card, tax):
 def main():
     utf8_stdout()
     p = argparse.ArgumentParser(description="Génère localement des fiches de variation.")
-    p.add_argument("--count", type=int, default=20)
+    p.add_argument("--count", type=int, default=load_config().get("default_count", 20))
     p.add_argument("--seed", type=int, default=20260928)
     p.add_argument("--ps-ratio", type=float, default=0.6, help="part de Problem Solving (0-1)")
     p.add_argument("--min-diff", type=int, default=4, help="axes différents minimum entre deux fiches")
     p.add_argument("--id-prefix", default="T", help="préfixe des task_id (ex. B001-T)")
     p.add_argument("--out-dir", default=str(BASE / "05_OUTPUTS"))
+    p.add_argument("--against", metavar="DOSSIER", help="tient compte des lots <DOSSIER>/batch_*/tasks/ existants")
     args = p.parse_args()
 
     rng = random.Random(args.seed)
@@ -104,17 +130,19 @@ def main():
     rng.shuffle(tracks)
 
     usage = {k: Counter() for k in ("subtype", *DIMENSIONS)}
+    previous = [item for _, item in dataset_items(args.against, exclude=args.out_dir)] if args.against else []
+    for item in previous:
+        record_usage(usage, item)
     cards = []
     for i, track in enumerate(tracks, 1):
-        for _ in range(MAX_ATTEMPTS):
-            card = draw_card(rng, tax, track, usage)
-            if all(dimension_diff(card, prev) >= args.min_diff for prev in cards):
+        for attempt in range(MAX_ATTEMPTS):
+            card = draw_card(rng, tax, track, usage, slack=attempt // SLACK_EVERY)
+            if all(dimension_diff(card, prev) >= args.min_diff for prev in previous + cards):
                 break
         else:
             sys.exit(f"Aucune fiche assez différente pour la tâche {i} : baisse --min-diff.")
         card = {"task_id": f"{args.id_prefix}{i:03d}", **card}
-        for key in usage:
-            usage[key].update(card[key] if key == "constraints" else [card[key]])
+        record_usage(usage, card)
         cards.append(card)
 
     out = Path(args.out_dir)
@@ -124,6 +152,7 @@ def main():
         "",
         f"Seed: {args.seed}",
         f"Count: {args.count} ({n_ps} Problem Solving / {args.count - n_ps} Machine Learning)",
+        f"Lots existants pris en compte: {len(previous)} tâche(s)" if args.against else "Lots existants pris en compte: aucun",
         "",
         "Copier chaque fiche dans Claude Desktop sous le MASTER SUPERPROMPT.",
         "",
