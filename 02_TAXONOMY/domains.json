@@ -1,0 +1,31 @@
+{
+  "problem_solving": [
+    "problem solving algorithmique",
+    "problem solving sous contraintes",
+    "debugging et root-cause analysis",
+    "optimisation algorithmique",
+    "optimisation combinatoire",
+    "raisonnement logique et décision",
+    "planification et recherche",
+    "problèmes multi-étapes",
+    "raisonnement probabiliste",
+    "systèmes de décision sous incertitude"
+  ],
+  "machine_learning": [
+    "machine learning général",
+    "deep learning",
+    "NLP et LLM",
+    "computer vision",
+    "speech/audio ML",
+    "time-series forecasting",
+    "recommender systems",
+    "reinforcement learning",
+    "representation learning",
+    "embeddings et retrieval",
+    "RAG et évaluation",
+    "ML systems et inference",
+    "MLOps et training pipelines",
+    "distributed training",
+    "model evaluation et robustness"
+  ]
+}

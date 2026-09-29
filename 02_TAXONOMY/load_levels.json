@@ -1,0 +1,27 @@
+[
+  {
+    "name": "prototype",
+    "throughput": "10 req/s",
+    "data": "10 GB"
+  },
+  {
+    "name": "small-production",
+    "throughput": "500 req/s",
+    "data": "500 GB"
+  },
+  {
+    "name": "production",
+    "throughput": "10k req/s",
+    "data": "10 TB"
+  },
+  {
+    "name": "high-scale",
+    "throughput": "100k req/s",
+    "data": "100 TB"
+  },
+  {
+    "name": "extreme-scale",
+    "throughput": "1M+ req/s",
+    "data": "1 PB+"
+  }
+]

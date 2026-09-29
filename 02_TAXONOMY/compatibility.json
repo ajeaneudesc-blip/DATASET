@@ -1,0 +1,39 @@
+{
+  "_doc": "Règles de cohérence appliquées par le générateur et le validateur. Une valeur absente d'une règle n'est pas restreinte.",
+  "incident_allowed_tracks": {
+    "dérive de modèle ML": ["machine_learning"]
+  },
+  "incident_excluded_languages": {
+    "garbage collector en surcharge": ["C", "C++", "Rust", "Swift", "Bash", "SQL"]
+  },
+  "language_allowed_domains": {
+    "Bash": [
+      "debugging et root-cause analysis",
+      "problèmes multi-étapes",
+      "MLOps et training pipelines"
+    ],
+    "SQL": [
+      "debugging et root-cause analysis",
+      "optimisation algorithmique",
+      "problèmes multi-étapes",
+      "raisonnement probabiliste",
+      "systèmes de décision sous incertitude",
+      "machine learning général",
+      "recommender systems",
+      "time-series forecasting",
+      "MLOps et training pipelines",
+      "model evaluation et robustness"
+    ]
+  },
+  "domain_allowed_languages": {
+    "deep learning": ["Python", "C++", "Rust"],
+    "distributed training": ["Python", "C++", "Rust", "Go"],
+    "representation learning": ["Python", "C++", "Rust"],
+    "computer vision": ["Python", "C++", "C", "Rust", "Swift", "Kotlin"],
+    "speech/audio ML": ["Python", "C++", "C", "Rust", "Swift", "Kotlin"],
+    "MLOps et training pipelines": ["Python", "Go", "Rust", "Java", "Kotlin", "TypeScript", "SQL", "Bash"]
+  },
+  "track_language_preference": {
+    "machine_learning": {"language": "Python", "probability": 0.5}
+  }
+}

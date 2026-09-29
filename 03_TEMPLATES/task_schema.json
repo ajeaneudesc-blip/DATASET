@@ -1,0 +1,29 @@
+{
+  "task_id": "unique-id",
+  "track": "problem_solving | machine_learning",
+  "title": "",
+  "domain": "",
+  "subtype": "",
+  "language": "",
+  "load_level": "",
+  "architecture_style": "",
+  "incident_type": "",
+  "failure_mode": "",
+  "task_mode": "",
+  "constraints": ["label de 02_TAXONOMY/constraints.json — détail chiffré"],
+  "context": "",
+  "existing_architecture": "",
+  "problem": "",
+  "evidence": [],
+  "objectives": [],
+  "deliverables": [],
+  "success_criteria": [],
+  "metadata": {
+    "difficulty": "extreme",
+    "requires_code": true,
+    "requires_architecture": true,
+    "requires_tradeoffs": true,
+    "requires_multistep_reasoning": true,
+    "solution_included": false
+  }
+}

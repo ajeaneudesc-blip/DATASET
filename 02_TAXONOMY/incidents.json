@@ -1,0 +1,22 @@
+[
+  "régression après déploiement",
+  "latence p99 qui explose sans hausse du p50",
+  "duplication sporadique d'opérations",
+  "perte ou retard d'événements",
+  "deadlocks rares",
+  "race condition non reproductible localement",
+  "hotspot sur une partition",
+  "fuite mémoire progressive",
+  "garbage collector en surcharge",
+  "cache incohérent",
+  "désynchronisation entre régions",
+  "timeouts intermittents",
+  "saturation d'un sous-ensemble de nœuds",
+  "corruption logique de données",
+  "dérive de schéma",
+  "backpressure insuffisante",
+  "file de messages qui croît silencieusement",
+  "coût cloud qui dérive",
+  "régression de sécurité",
+  "dérive de modèle ML"
+]

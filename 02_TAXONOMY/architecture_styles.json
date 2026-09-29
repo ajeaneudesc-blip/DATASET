@@ -1,0 +1,13 @@
+[
+  "monolithe modulaire",
+  "microservices",
+  "event-driven",
+  "serverless",
+  "actor model",
+  "stream processing",
+  "batch + streaming",
+  "multi-région actif/actif",
+  "multi-région actif/passif",
+  "service mesh",
+  "architecture hexagonale"
+]

@@ -1,0 +1,22 @@
+[
+  "classification difficile",
+  "régression robuste",
+  "ranking",
+  "clustering",
+  "anomaly detection",
+  "NLP long-context",
+  "fine-tuning",
+  "distillation",
+  "data-centric ML",
+  "label noise",
+  "class imbalance",
+  "domain adaptation",
+  "multimodal learning",
+  "time-series forecasting",
+  "recommender system",
+  "RL sous contraintes",
+  "model serving",
+  "drift detection",
+  "evaluation de LLM",
+  "retrieval et reranking"
+]

@@ -1,0 +1,23 @@
+{
+  "project_name": "Extreme AI Dataset Lab",
+  "language": "fr",
+  "default_difficulty": "extreme",
+  "default_count": 20,
+  "output_mode": "problem_statement_only",
+  "include_solution": false,
+  "include_hidden_chain_of_thought": false,
+  "require_realistic_context": true,
+  "require_tradeoffs": true,
+  "require_success_criteria": true,
+  "require_metadata": true,
+  "variation_axes": [
+    "domain",
+    "language",
+    "load_level",
+    "constraints",
+    "incident_type",
+    "architecture_style",
+    "failure_mode",
+    "task_mode"
+  ]
+}

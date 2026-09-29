@@ -1,0 +1,20 @@
+[
+  "zero downtime",
+  "rollback obligatoire",
+  "budget mensuel plafonné",
+  "compatibilité API stricte",
+  "legacy non remplaçable à court terme",
+  "p99 très faible",
+  "SLA élevé",
+  "multi-région",
+  "multi-tenant",
+  "fenêtre de migration courte",
+  "équipe réduite",
+  "auditabilité complète",
+  "faible consommation mémoire",
+  "réseau partiellement instable",
+  "déploiement progressif",
+  "forte croissance des données",
+  "résilience à la panne d'une région",
+  "observabilité sans surcharge excessive"
+]

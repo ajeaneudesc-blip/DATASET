@@ -1,0 +1,14 @@
+[
+  "panne d'un nœud",
+  "panne d'une zone",
+  "panne d'une région",
+  "partition réseau",
+  "latence d'un fournisseur externe",
+  "double livraison",
+  "rejouement d'événements",
+  "perte de cache",
+  "disque lent",
+  "horloge dérivante",
+  "déploiement partiel",
+  "version mixte pendant migration"
+]
