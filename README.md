@@ -19,7 +19,7 @@ doivent fournir des hypothèses, décisions, preuves, tests et justifications te
 
 1. Ouvre ce dossier dans Claude Desktop / Claude Code.
 2. Lis `01_PROMPTS/MASTER_SUPERPROMPT.md`.
-3. Utilise `04_SEEDS/seed_tasks.jsonl` comme base (35 seeds : 21 Problem Solving / 14 ML).
+3. Utilise `04_SEEDS/seed_tasks.jsonl` comme base (55 seeds : 33 Problem Solving / 22 ML, couvrant toutes les valeurs de la taxonomie).
 4. Demande à Claude de générer des variantes en changeant simplement :
    - domaine ;
    - langage ;
