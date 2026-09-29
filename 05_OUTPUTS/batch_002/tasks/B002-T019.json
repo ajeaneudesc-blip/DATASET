@@ -34,7 +34,7 @@
   ],
   "deliverables": [
     "Contre-exemple formel : famille d'entrées, coût de v1 et de v2 en fonction de ses paramètres, preuve que le rapport des coûts n'est pas borné, et instance minimale reproductible (fichier de points et requête) tirée ou dérivée de la production.",
-    "Algorithme corrigé (construction et requête), énoncé et preuve de ses bornes, et analyse du temps de construction, de la taille du fichier et du temps d'initialisation à 1,1 M et à 2,5 M points.",
+    "Algorithme corrigé (construction et requête), énoncé et preuve de ses bornes, et analyse du temps de construction, de la taille du fichier et du temps d'initialisation à 1,1 M et à 2,5 M points, ainsi que tout amendement de la règle de classement qu'imposeraient ces bornes, avec son effet mesuré sur les listes renvoyées.",
     "Code Rust : construction, requête des k plus proches voisins avec un ordre total déterministe entre bornes équidistantes, tests de propriété (proptest) contre une recherche exhaustive sur des jeux aléatoires et sur la famille de contre-exemples, benchmarks criterion de l'index seul et de bout en bout.",
     "Plan de tests de charge : modèle de charge (répartition spatiale observée, scénario partenaire, rafales), maîtrise et mesure du taux de démarrages à froid, mesure par version, générateur en boucle ouverte qui évite l'omission coordonnée, seuils go/no-go chiffrés.",
     "Plan de migration et de rollback à double format : publication, lecture, bascule d'alias par paliers, cohérence des réponses pendant la cohabitation, durée de retour arrière mesurée, et répartition du travail entre les 2 développeurs sur 3 semaines."
