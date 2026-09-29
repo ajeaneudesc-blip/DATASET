@@ -65,6 +65,7 @@ Toutes les tâches sont **ACCEPTÉES APRÈS CORRECTIONS**. Le validateur donne 0
   - C#, JavaScript, Kotlin, Rust et C++ apparaissent deux fois chacun, Python trois fois ;
   - la difficulté n'a pas été mesurée empiriquement contre des modèles, et les chiffres ont été vérifiés
     par les relecteurs, pas par des experts de chaque domaine.
-- **Non versionné** : les scénarios (mécanismes cachés) et les rapports détaillés des relecteurs, qui
-  constituent de fait des corrigés. Ils ne doivent pas être publiés avec les énoncés si le lot sert
-  d'évaluation.
+- **Corrigés** : les scénarios (mécanismes cachés) et les rapports détaillés des relecteurs, qui
+  constituent de fait des corrigés, sont sur la branche orpheline `corriges` (dossier `batch_002/`),
+  à ne jamais fusionner avec les énoncés. Le dépôt étant public, ils sont lisibles par tous : à
+  prendre en compte si le lot sert à évaluer des modèles.
