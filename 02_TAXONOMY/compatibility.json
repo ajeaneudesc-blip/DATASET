@@ -1,10 +1,25 @@
 {
   "_doc": "Règles de cohérence appliquées par le générateur et le validateur. Une valeur absente d'une règle n'est pas restreinte.",
   "incident_allowed_tracks": {
-    "dérive de modèle ML": ["machine_learning"]
+    "dérive de modèle ML": ["machine_learning"],
+    "leakage découvert après mise en production": ["machine_learning"],
+    "écart training/serving": ["machine_learning"],
+    "divergence ou instabilité d'entraînement": ["machine_learning"],
+    "métriques offline et online contradictoires": ["machine_learning"],
+    "dégradation silencieuse de la calibration": ["machine_learning"],
+    "contamination du jeu d'évaluation": ["machine_learning"],
+    "boucle de rétroaction qui biaise les données": ["machine_learning"],
+    "régression sur un sous-groupe masquée par la moyenne": ["machine_learning"]
   },
   "incident_excluded_languages": {
-    "garbage collector en surcharge": ["C", "C++", "Rust", "Swift", "Bash", "SQL"]
+    "garbage collector en surcharge": ["C", "C++", "Rust", "Swift", "Bash", "SQL"],
+    "divergence ou instabilité d'entraînement": ["SQL", "Bash"]
+  },
+  "failure_allowed_tracks": {
+    "perte d'un worker GPU en cours d'entraînement": ["machine_learning"],
+    "checkpoint corrompu ou incomplet": ["machine_learning"],
+    "feature store indisponible ou périmé": ["machine_learning"],
+    "labels en retard ou partiellement manquants": ["machine_learning"]
   },
   "language_allowed_domains": {
     "Bash": [

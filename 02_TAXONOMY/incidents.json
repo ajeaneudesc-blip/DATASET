@@ -18,5 +18,13 @@
   "file de messages qui croît silencieusement",
   "coût cloud qui dérive",
   "régression de sécurité",
-  "dérive de modèle ML"
+  "dérive de modèle ML",
+  "leakage découvert après mise en production",
+  "écart training/serving",
+  "divergence ou instabilité d'entraînement",
+  "métriques offline et online contradictoires",
+  "dégradation silencieuse de la calibration",
+  "contamination du jeu d'évaluation",
+  "boucle de rétroaction qui biaise les données",
+  "régression sur un sous-groupe masquée par la moyenne"
 ]

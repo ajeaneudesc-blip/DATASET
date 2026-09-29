@@ -10,5 +10,9 @@
   "disque lent",
   "horloge dérivante",
   "déploiement partiel",
-  "version mixte pendant migration"
+  "version mixte pendant migration",
+  "perte d'un worker GPU en cours d'entraînement",
+  "checkpoint corrompu ou incomplet",
+  "feature store indisponible ou périmé",
+  "labels en retard ou partiellement manquants"
 ]
