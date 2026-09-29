@@ -1,5 +1,8 @@
 __pycache__/
 *.pyc
 .venv/
+# Les brouillons générés à la racine de 05_OUTPUTS restent locaux ;
+# les lots finalisés (05_OUTPUTS/batch_*/) sont versionnés.
 05_OUTPUTS/*
 !05_OUTPUTS/.gitkeep
+!05_OUTPUTS/batch_*/

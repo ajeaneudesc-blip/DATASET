@@ -75,9 +75,14 @@ signale les fuites de solution probables. L'assembleur produit `tasks.jsonl` et
 
 ## Lots générés
 
-- `05_OUTPUTS/batch_001/` : 20 tâches (12 Problem Solving / 8 Machine Learning),
-  relues par trois relecteurs indépendants (réalisme chiffré, Quality Gate,
-  solveur adversarial) puis par une critique de lot.
+Les lots finalisés (`05_OUTPUTS/batch_*/`) sont versionnés ; les brouillons
+générés à la racine de `05_OUTPUTS/` restent locaux.
+
+- `batch_001` : 20 tâches (12 Problem Solving / 8 Machine Learning), relues par
+  trois relecteurs indépendants (réalisme chiffré, Quality Gate, solveur
+  adversarial) puis par une critique de lot. Produit localement mais **absent du
+  dépôt** (il était exclu par `.gitignore`) : le copier dans
+  `05_OUTPUTS/batch_001/` pour le versionner.
 
 ## Structure
 
