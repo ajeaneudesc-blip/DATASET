@@ -33,18 +33,18 @@
     "Définir la sortie de l'état mixte (poursuite du déploiement ou retour arrière) sans réaffecter d'utilisateur déjà exposé, et décider du sort des trois expériences touchées."
   ],
   "deliverables": [
-    "Note de diagnostic : mécanisme de chaque phénomène, hypothèses écartées (SDK Android 5.2, bucketing, propagation des configurations) avec leur réfutation, inconnues, et méthode de recensement des flags touchés sur tous les tenants avec son coût de calcul.",
+    "Note de diagnostic : mécanisme de chaque phénomène, hypothèses concurrentes examinées (SDK Android 5.2, bucketing, propagation des configurations), chacune confirmée ou réfutée par les preuves, inconnues, et méthode de recensement des flags touchés sur tous les tenants avec son coût de calcul.",
     "Comparaison d'au moins trois stratégies d'évaluation (par exemple parcours séquentiel optimisé, index inversé, structure de décision partagée, compilation paresseuse) : complexité en temps et en mémoire, mesures sur t-0193 et sur un jeu de règles doublé, coût de chargement, choix argumenté.",
     "Implémentation JavaScript multi-fichiers : compiler/ (compilation et sérialisation), edge/evaluate.js, edge/bucketing.js et edge/migration-shim.js (choix de version par PoP, lecture des deux formats d'artefact), avec des représentations mémoire justifiées pour V8.",
     "Tests : équivalence différentielle entre v1 et le nouvel évaluateur (propriétés sur des règles générées qui se chevauchent, rejeu de contextes réels), tests du bucketing, bancs de mémoire et de CPU exécutés sous les plafonds de l'isolate.",
     "Plan de migration et de retour arrière à partir de l'état actuel : traitement des utilisateurs déjà exposés à des variantes divergentes, décision sur les trois expériences, critères de passage de palier et d'arrêt, durée."
   ],
   "success_criteria": [
-    "Équivalence : aucun écart de variante ni d'indice de règle source avec v1 sur le rejeu de 50 M contextes réels (7 jours, 20 plus gros tenants) et sur 10 M cas générés à règles chevauchantes (arités différentes, négations, listes de plus de 100 000 valeurs).",
+    "Équivalence : aucun écart de variante ni d'indice de règle source avec v1 sur le rejeu de 50 M contextes réels (7 jours, 20 plus gros tenants) et sur 10 M cas générés adverses (règles qui se chevauchent, négations, listes de plus de 100 000 valeurs).",
     "t-0193 : configuration chargée ≤ 40 Mo de tas, chargement ≤ 120 ms de CPU, évaluation ≤ 3 ms de CPU au p99, et ≤ 5 ms au p99 avec un jeu de règles synthétique doublé.",
     "À chaque palier : aucune expérience active en SRM attribuable à la version (p > 0,001 par population v1 et v2), utilisateurs multi-variantes ≤ 0,005 %, évictions ≤ 0,5 par PoP et par heure.",
     "Répétition de retour arrière sur 3 PoP : retour complet en ≤ 15 min et aucun utilisateur déjà exposé réaffecté dans les 48 h suivantes (mesuré sur les expositions), hors expériences invalidées par leur propriétaire.",
-    "Recensement reproductible par script : il retrouve 100 % des 5 177 utilisateurs multi-variantes connus et chiffre, flag par flag et pour tous les tenants, les utilisateurs dont la variante a dépendu de la version."
+    "Recensement reproductible par script : il attribue une cause à chacun des 5 177 utilisateurs multi-variantes connus (version d'évaluateur, changement de cfg ou autre) et chiffre, flag par flag et pour tous les tenants, les utilisateurs dont la variante a dépendu de la version."
   ],
   "metadata": {
     "difficulty": "extreme",
