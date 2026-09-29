@@ -1,0 +1,104 @@
+title: "Rollback d'une politique RL de pacing budgétaire dont l'état diverge entre régions"
+constraints:
+  observabilité sans surcharge excessive: "au plus 2 % de CPU supplémentaire par nœud d'enchères ; aucun log par requête (1,2 M req/s) ; métriques par campagne agrégées sur 1 min au minimum"
+  zero downtime: "les enchères ne s'arrêtent jamais ; une campagne sans politique valide doit répondre en moins de 8 ms avec un comportement par défaut sûr (pas d'enchère ou enchère plancher)"
+  multi-tenant: "38 000 annonceurs, 212 000 campagnes actives ; aucune correction ne doit modifier la dépense facturée d'un annonceur non affecté ; chaque annonceur affecté doit recevoir un relevé chiffré de l'écart"
+context: |-
+  AdPulse opère une plateforme d'achat programmatique qui répond à 1,2 M requêtes d'enchères par seconde, réparties sur trois régions (us-east ≈ 540 k/s, eu-west ≈ 410 k/s, ap-south ≈ 250 k/s). Environ 1,4 PB de journaux d'enchères sont conservés pour l'entraînement.
+
+  Le rythme de dépense (pacing) et le niveau d'enchère de chaque campagne sont décidés par une politique d'apprentissage par renforcement sous contraintes. Elle est entraînée hors ligne toutes les 6 h par l'équipe Research. En ligne, deux multiplicateurs de Lagrange sont mis à jour à chaque notification de gain : λ_budget pour la contrainte de budget journalier et λ_cpa pour le coût par acquisition cible.
+
+  Le 22 septembre 2026, la politique v42 a été déployée à 09:10 UTC (canari 5 %), puis sur 100 % du trafic à 11:40 UTC. Les notes de version annoncent deux changements :
+  - λ est désormais normalisé par le budget journalier et devient sans dimension ;
+  - la clé de déduplication des notifications de gain change pour éviter des collisions d'identifiants entre exchanges.
+
+  Entre 12:00 et 18:00 UTC, deux problèmes ont été signalés : le support annonceurs relève des sous-livraisons massives en Europe et la finance détecte des campagnes qui dépassent leur budget. Le produit exige un « rollback immédiat vers v41 ». L'équipe Research signale que l'entraînement de v43 a démarré à 15:00 UTC sur les journaux du jour.
+
+  Tu es l'ingénieur principal chargé de décider et de piloter le retour à un état sûr.
+existing_architecture: |-
+  - **Nœuds d'enchères (Go 1.22)** : 1 900 pods. Chaque campagne est un acteur par région, construit sur le runtime interne « hive » (boîte aux lettres, un acteur = une goroutine). L'acteur garde en mémoire l'état de pacing : dépense vue, λ_budget, λ_cpa, un filtre de Bloom des notifications déjà vues, et la version de politique utilisée.
+  - **Passivation** : un acteur inactif pendant 10 min est passivé. Son état est alors écrit dans un KV régional (snapshot), puis relu à la réactivation. Les snapshots sont répliqués de façon asynchrone entre régions (RPO annoncé : 5 min) pour permettre la reprise d'une campagne dans une autre région.
+  - **Versions** : un registre de poids par région sert les poids par numéro de version. Une campagne conserve la version enregistrée dans son snapshot jusqu'à la réinitialisation quotidienne de 00:00 dans son fuseau (règle de cohérence intra-journée).
+  - **Coordinateur budgétaire global** : toutes les 30 s, il répartit le budget restant de chaque campagne entre régions, à partir de la dépense déclarée par les acteurs.
+  - **Ledger de facturation** : il fait autorité. Il déduplique par WinID seul et est consolidé avec 15 min de retard. Les annonceurs sont facturés sur le ledger, jamais sur la vue des acteurs.
+  - **Notifications de gain** : elles sont envoyées par 14 exchanges avec une sémantique au moins une fois. L'exchange AX, majoritaire en Europe, réémet après 1 à 3 s sans accusé de réception.
+problem: |-
+  Plusieurs mécanismes se superposent, et la demande de rollback porte à la fois sur les poids de la politique et sur un état appris en ligne dont la sémantique a changé entre v41 et v42.
+
+  Il faut d'abord établir, preuves à l'appui, ce qui explique chacun des symptômes observés :
+  - la sous-livraison en eu-west ;
+  - les dépassements de budget en us-east ;
+  - le mélange de versions servies.
+
+  Il faut ensuite concevoir un plan de retour à un état sûr qui ne crée pas de nouveau dommage : un rollback, un roll-forward correctif, ou une combinaison des deux. Ce plan doit rester compatible avec les enchères continues, l'isolation par annonceur et la réplication asynchrone des snapshots, et il doit dire ce qu'il advient de l'entraînement de v43.
+evidence:
+  - |-
+    Tableau de bord à 18:00 UTC (dépenses rapportées au budget journalier au prorata de l'heure) :
+    ```text
+    Région    Dépense vue      Dépense ledger   Campagnes >105 %   Campagnes <80 % du   λ_budget médian   Politique servie
+              acteurs/budget   /budget          budget (ledger)    rythme cible         (acteurs v42)
+    us-east   0,96             0,95             2,1 % (1 870)      1,2 %                0,19              v42 97,4 % / v41 2,6 %
+    eu-west   0,87             0,85             0,2 %              7,0 %                0,86              v42 83,5 % / v41 16,5 %
+    ap-south  0,92             0,91             0,3 %              1,8 %                0,22              v42 99,6 % / v41 0,4 %
+    ```
+  - |-
+    Extrait de journal des nœuds d'enchères us-east (échantillon, niveau INFO) :
+    ```text
+    2026-09-22T13:41:07Z hive/activate campaign=c-88412 origin_snapshot=eu-west snapshot_ts=13:36:52 policy_version=41 lambda_budget=0.00031 lambda_cpa=0.00012
+    2026-09-22T13:41:07Z pacing/load  campaign=c-88412 weights=v42 reason="registry default (v41 evicted from us-east cache)"
+    2026-09-22T13:52:44Z pacing/alert campaign=c-88412 spend_rate=3.8x target over 10m
+    2026-09-22T14:03:19Z hive/activate campaign=c-10277 origin_snapshot=us-east snapshot_ts=14:01:02 policy_version=42 lambda_budget=0.41 lambda_cpa=0.07
+    ```
+  - |-
+    Extrait du gestionnaire de notifications de gain (v42) :
+    ```go
+    // pacing/win.go — v42
+    func (a *CampaignActor) onWin(ev WinEvent) {
+        // Des exchanges réutilisent des WinID : on qualifie la clé par l'instant de réception.
+        key := ev.WinID + ":" + strconv.FormatInt(ev.ReceivedAt.Truncate(time.Second).Unix(), 10)
+        if a.seen.Test(key) {
+            return
+        }
+        a.seen.Add(key)
+        a.spentMicros += ev.PriceMicros
+        a.lambdaBudget = math.Max(0, a.lambdaBudget+a.eta*(a.spendRate()-a.targetRate()))
+        a.lambdaCPA = math.Max(0, a.lambdaCPA+a.etaCPA*(a.cpa()-a.targetCPA))
+    }
+    ```
+  - |-
+    Rapprochement acteurs / ledger par exchange, 12:00–18:00 UTC : notifications comptées par les acteurs mais absentes du ledger (doublons au sens WinID) — AX : 6,1 % (AX représente 72 % des gains en eu-west), autres exchanges européens : 0,2 %, exchanges US : 0,1 %. Le ledger étant consolidé avec 15 min de retard, sa dépense est légèrement inférieure à celle des acteurs même sans doublons. Avant 09:10 UTC, les écarts étaient inférieurs à 0,05 % partout.
+  - |-
+    Distribution des λ_budget dans les snapshots échantillonnés (10 000 par région) : les snapshots marqués policy_version=41 ont des valeurs entre 0,0001 et 0,0009 ; ceux marqués policy_version=42 entre 0,05 et 1,3. Structure persistée dans le KV régional :
+    ```go
+    // hive/pacing/snapshot.go
+    type PacingSnapshot struct {
+        CampaignID    string    `json:"cid"`
+        PolicyVersion int       `json:"pv"`
+        SpentMicros   int64     `json:"spent"`
+        LambdaBudget  float64   `json:"lb"`
+        LambdaCPA     float64   `json:"lc"`
+        SeenFilter    []byte    `json:"seen"` // filtre de Bloom sérialisé
+        SnapshotAt    time.Time `json:"ts"`
+    }
+    ```
+  - "Research : la politique hors ligne est entraînée sur les journaux d'enchères enrichis de la dépense vue par les acteurs ; le job v43 (démarré à 15:00 UTC) consomme les journaux de 09:00 à 15:00. Aucune information n'est disponible sur la sensibilité de l'entraînement à une dépense surestimée."
+objectives:
+  - "Expliquer, preuves à l'appui, chacun des trois symptômes (sous-livraison eu-west, dépassements us-east, mélange de versions), en distinguant faits établis, hypothèses et inconnues."
+  - "Définir un plan de retour à un état sûr, sans interruption des enchères, qui traite ensemble les poids, l'état appris en ligne (λ, dépense vue, filtre de déduplication) et la réplication des snapshots."
+  - "Garantir que la contrainte budgétaire de chaque campagne est respectée pendant et après la transition, et chiffrer l'impact pour les annonceurs touchés."
+  - "Décider du sort de l'entraînement v43 et des journaux du 22 septembre."
+deliverables:
+  - "Note de diagnostic : chaîne causale par symptôme, preuves utilisées, hypothèses restantes et mesures (peu coûteuses) permettant de les trancher."
+  - "Plan de rollback / roll-forward séquencé : ordre des actions, état attendu à chaque étape, critères d'arrêt et de retour arrière du plan lui-même, durée estimée."
+  - "Modifications Go de l'acteur couvrant la persistance et la réactivation de l'état, le traitement des notifications de gain et le comportement par défaut sûr, avec tests unitaires et un test de rejeu de 24 h de notifications avec doublons injectés."
+  - "Stratégie de recalcul des λ et de la dépense à partir du ledger, et procédure de relevé par annonceur affecté."
+  - "Liste minimale de métriques et d'alertes compatibles avec le budget d'observabilité, pour détecter une récidive (mélange de versions, écarts acteurs/ledger)."
+success_criteria:
+  - "Au rejeu de la journée du 22 septembre avec les correctifs, l'écart entre dépense vue par les acteurs et ledger reste < 0,1 % par exchange, doublons AX compris."
+  - "Pendant et après la transition : ≤ 0,5 % des campagnes au-delà de 102 % de leur budget journalier (ledger) et ≤ 2 % sous 80 % du rythme cible, dans chaque région."
+  - "Aucune enchère n'est servie à partir d'un état restauré (local ou répliqué) incompatible avec les poids effectivement chargés ; vérifié par un test couvrant les réactivations croisées entre régions et versions, et par une métrique de production."
+  - "Latence d'enchère p99 < 8 ms maintenue pendant toute la transition, et surcoût CPU des nouvelles métriques ≤ 2 % par nœud."
+  - "Décision argumentée et traçable sur v43 : réutilisation, correction des journaux ou réentraînement, avec le critère retenu."
+metadata:
+  requires_code: true
+  requires_architecture: true

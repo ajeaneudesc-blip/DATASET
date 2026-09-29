@@ -1,0 +1,152 @@
+title: "Diagnostic probabiliste d'une dérive de coût de 63 % sur un pipeline d'événements ClickHouse à 1,4 M événements/s"
+constraints:
+  forte croissance des données: "+9 % de volume par mois attendus sur 12 mois (≈ ×2,8 d'ici septembre 2027) ; la conception retenue doit tenir cette trajectoire sans refonte, et son coût doit être chiffré à 6 et à 12 mois"
+  faible consommation mémoire: "nœuds de 64 Go dont 40 Go au plus pour l'exécution des requêtes, aucune montée de gamme avant janvier 2027 ; une requête de tableau de bord ne doit pas dépasser 2 Go"
+  rollback obligatoire: "toute modification de politique de stockage, de TTL, de schéma ou de vue matérialisée doit pouvoir être annulée en moins d'1 h, sans perte d'événement ni réécriture massive des parts déjà déplacées vers S3"
+context: |-
+  Vireolab édite trois jeux mobiles, dont Rift Tactics, pour 68 M de joueurs actifs par mois. Tous les événements de jeu, télémétrie technique des clients comprise, alimentent une chaîne analytique : 1,05 M événements/s en moyenne, 1,4 M en pointe, ≈ 180 To sur disques chauds et ≈ 1,3 Po sur S3.
+
+  Le 28 septembre 2026, l'équipe FinOps donne l'alerte. Le coût hebdomadaire du compte cloud analytics est passé de 23,2 k€ en semaine 33 à 37,8 k€ en semaine 39 (+63 %), alors que le volume d'événements n'a crû que de 18 %. Sur la période :
+  - 14 août : sept nœuds ClickHouse sont recréés après une mise hors service matérielle programmée par l'hébergeur ;
+  - 17 août : lancement de la saison 7 de Rift Tactics ;
+  - 20 août : `log_queries_probability = 0.1` est ajouté au profil `default` pour alléger `system.query_log` ;
+  - 26 août : mise en service du tableau de bord LiveOps Pulse, affiché en continu sur les écrans des salles LiveOps de Lyon et de Montréal.
+
+  Quatre équipes avancent quatre explications : la croissance naturelle (FinOps), le tableau de bord (SRE), les disques (plateforme), le trafic inter-zones (réseau). L'export de facturation n'attribue par étiquette qu'environ 70 % du coût de septembre. Le comité budgétaire du 9 octobre attend une attribution chiffrée du surcoût et un plan qui empêche la récidive malgré la croissance prévue.
+
+  Le diagnostic et la conception te sont confiés.
+existing_architecture: |-
+  - **Collecte** : collecteurs HTTP → Kafka sur 3 zones ; topic principal de 192 partitions.
+  - **ClickHouse auto-géré** : 48 nœuds de 16 vCPU et 64 Go, soit 24 shards × 2 réplicas placés dans deux zones différentes. Chaque nœud consomme 4 partitions via une table moteur Kafka et une vue matérialisée, puis insère localement dans `events.game_events` (ReplicatedMergeTree, partition par jour). L'autre réplica récupère les parts par le port interserveur 9009. Les requêtes passent par la table Distributed `game_events_all` (`load_balancing = random`).
+  - **Stockage** : politique `hot_cold`. Chaud : volume réseau de type gp3 de 3,75 To par nœud, débit provisionné à 500 Mo/s dans le gabarit standard. Froid : bucket S3 atteint par un point de terminaison de passerelle (sans frais de transfert), cache disque local de 50 Go par nœud ; chaque réplica garde sa propre copie des parts froides.
+  - **Rétention** : événements bruts 7 jours sur le chaud, puis S3 jusqu'à 60 jours ; agrégats horaires (AggregatingMergeTree, `sumState`, `uniqState`) conservés 25 mois.
+  - **Lecteurs** : ETL horaire, analystes et outil interne de tableaux de bord, qui interroge ClickHouse sans cache de résultats.
+problem: |-
+  Le surcoût de 14,6 k€ par semaine doit être réparti entre les explications concurrentes et leurs éventuelles interactions, avec une incertitude explicite. Les sources sont lacunaires :
+  - 30 % du coût n'est pas attribué ;
+  - `query_log` est échantillonné depuis une date proche du début de la dérive ;
+  - les journaux de flux réseau ne couvrent qu'une zone ;
+  - certaines configurations ne sont pas accessibles.
+
+  Il faut dire quelles mesures peu coûteuses départageraient les hypothèses, et dans quel ordre les lancer. Il faut ensuite concevoir une chaîne d'ingestion, de stockage et de requêtes dont le coût reste prévisible quand un disque ralentit ou qu'une requête coûteuse apparaît. Elle doit absorber la croissance attendue sans mémoire supplémentaire, et chaque changement doit être réversible.
+evidence:
+  - |-
+    Coût hebdomadaire du compte analytics (k€, export de facturation). « Non attribué » regroupe les postes sans étiquette : transfert inter-zones, passerelles NAT, journaux, ressources d'autres équipes hébergées sur le compte.
+    ```text
+    Semaine 2026              S33   S34   S35   S36   S37   S38   S39
+    Calcul ClickHouse (48)    6,5   6,5   6,5   6,5   6,5   6,5   6,5
+    Collecteurs + Kafka       2,4   2,5   2,6   2,6   2,7   2,8   2,8
+    Volumes chauds gp3        3,1   3,1   3,1   3,1   3,1   3,1   3,1
+    S3 capacité               5,2   5,3   5,4   5,6   5,7   5,9   6,0
+    S3 requêtes (GET + PUT)   0,5   0,9   3,6   5,1   6,4   7,3   8,0
+    Non attribué              5,5   6,9   7,6   8,8   9,9  10,8  11,4
+    Total                    23,2  25,2  28,8  31,7  34,3  36,4  37,8
+    ```
+    Événements ingérés : 538 G en S33, 635 G en S39. Métriques du bucket froid, moyenne par jour : S33 : 180 M GET et 1,1 M PUT ; S39 : 3 050 M GET et 3,4 M PUT. Tarifs : GET 0,37 € par million, PUT 4,6 € par million, transfert inter-zones 0,018 €/Go (deux sens cumulés).
+  - |-
+    Métriques disque et ingestion de la semaine 39 (exporteur de nœud, p95 sur 06:00–23:00 UTC) :
+    ```text
+    Groupe de nœuds                     Débit disque   Utilisation   Attente E/S   iowait   Retard Kafka     Mémoire résidente
+    ch-05, 11, 18, 22, 29, 36, 44       125 Mo/s (*)   99 %          38 ms         31 %     jusqu'à 14 min   52 Go
+    leurs 7 réplicas pairs              310 Mo/s       58 %          2,4 ms        4 %      < 5 s            39 Go
+    34 autres nœuds                     270 Mo/s       49 %          1,9 ms        3 %      < 5 s            37 Go
+    (*) plateau constant de 06:00 à 23:00, lecture et écriture cumulées
+    ```
+    Ces sept nœuds sont ceux recréés le 14 août. L'export d'inventaire ne contient pas les paramètres de débit de leurs volumes (non disponible) ; dans la facturation, le coût de chacun de leurs volumes est à 5 % près celui des autres. Taux de remplissage du volume chaud : 69 % en S33, 81 % en S39.
+  - |-
+    Requête lancée le 28 septembre sur tout le cluster, complétée par la même agrégation sur `system.replication_queue` et `system.part_log` :
+    ```sql
+    SELECT hostName() AS noeud,
+           countIf(active) AS parts_actives,
+           countIf(active AND disk_name = 's3_cold') AS parts_froides,
+           countIf(active AND disk_name = 's3_cold' AND max_date >= today() - 30) AS parts_froides_30j,
+           round(avgIf(bytes_on_disk, active) / 1e9, 2) AS taille_moy_go
+    FROM clusterAllReplicas('ev', system.parts)
+    WHERE database = 'events' AND table = 'game_events'
+    GROUP BY noeud;
+    ```
+    ```text
+    Médianes par groupe   Parts actives   dont froides   froides < 30 j   Taille moy. (Go)   File de réplication   dont MERGE_PARTS
+    7 lents               24 900          18 700         11 300            0,96              2 960                 2 710
+    7 pairs                1 260             980            410           19,4                 140                    96
+    34 autres              1 220             950            400           19,6                  38                    30
+
+    system.part_log, moyenne par nœud et par jour sur 7 jours
+    Groupe      NewPart (Go)   MergeParts écrits (Go)   DownloadPart réussis (Go)   DownloadPart en erreur (nombre)
+    7 lents     214            380                      520                         2 380 (code 209, SOCKET_TIMEOUT)
+    7 pairs     219            2 150                    228                         4
+    34 autres   216            2 210                    221                         3
+    ```
+  - |-
+    Extrait de `system.query_log` du jeudi 24 septembre : requêtes initiales, `type = 'QueryFinish'`, compteurs S3 sommés sur les sous-requêtes des shards via `initial_query_id`.
+    ```text
+    Utilisateur   Requête                            Lignes journalisées   GET S3 moy.   Lu moy.   Mémoire moy.   Durée p50
+    pulse_ro      Pulse « Revenu 30 j »              596                   186 000       41 Go     7,1 Go         31,8 s
+    pulse_ro      Pulse « Rétention 30 j »           581                   171 000       38 Go     6,4 Go         29,5 s
+    etl_agg       INSERT des agrégats horaires       239                         0        1,8 Go   2,2 Go          4,1 s
+    analyst_*     ad hoc (1 204 formes distinctes)   3 912                   4 100        0,9 Go   0,6 Go          1,2 s
+    ```
+    Note SRE du 28 septembre : « D'après query_log, Pulse pèse 7 % des GET S3 du bucket : ce n'est pas lui. » L'utilisateur `pulse_ro` relève du profil `readonly_bi`, défini dans un fichier de configuration géré par l'équipe BI (non fourni). Le nombre d'onglets ouverts sur Pulse en dehors des deux écrans est inconnu.
+  - |-
+    Schéma de la table brute et requête d'un panneau de Pulse :
+    ```sql
+    CREATE TABLE events.game_events ON CLUSTER ev
+    (
+        event_date   Date,
+        event_time   DateTime64(3, 'UTC'),
+        game_id      LowCardinality(String),
+        event_type   LowCardinality(String),
+        player_id    UInt64,
+        country      LowCardinality(String),
+        revenue_eur  Decimal(18, 6),
+        payload      String CODEC(ZSTD(3))
+        -- ... 74 autres colonnes
+    )
+    ENGINE = ReplicatedMergeTree('/clickhouse/{shard}/game_events', '{replica}')
+    PARTITION BY event_date
+    ORDER BY (game_id, event_type, event_time, player_id)
+    TTL event_date + INTERVAL 7 DAY TO VOLUME 'cold',
+        event_date + INTERVAL 60 DAY DELETE
+    SETTINGS storage_policy = 'hot_cold';
+
+    -- LiveOps Pulse, panneau « Revenu 30 j », rafraîchi toutes les 60 s
+    SELECT event_date AS jour, game_id,
+           sumIf(revenue_eur, event_type = 'purchase')          AS revenu,
+           uniqExactIf(player_id, event_type = 'purchase')      AS payeurs,
+           uniqExactIf(player_id, event_type = 'session_start') AS actifs
+    FROM events.game_events_all
+    WHERE event_date >= today() - 30
+      AND event_type IN ('purchase', 'session_start')
+    GROUP BY jour, game_id
+    ORDER BY jour, game_id;
+    ```
+    Note BI : les agrégats horaires existants ont été écartés pour Pulse, car LiveOps rapproche chaque semaine le nombre de joueurs payants à l'unité avec la finance.
+  - |-
+    Journaux de flux réseau activés seulement sur le sous-réseau de la zone c (16 nœuds ClickHouse, dont ch-11, ch-29 et ch-44), échantillonnés à 1/100 et extrapolés ×100. Trafic entrant depuis les zones a et b, en To par jour :
+    ```text
+    Port (usage)                           S33 (moy./jour)   S39 (moy./jour)
+    9009 (interserveur, parts)             3,2               16,3
+    9000 (sous-requêtes distribuées)       0,4                4,2
+    9092 (Kafka vers consommateurs CH)     3,8                4,5
+    ```
+    En S39, 82 % du trafic entrant sur le port 9009 a pour destination ch-11, ch-29 et ch-44. Aucune donnée équivalente n'existe pour les zones a et b.
+objectives:
+  - "Attribuer le surcoût de 14,6 k€/semaine (S33 → S39) aux explications concurrentes et à leurs interactions, avec a priori, vraisemblances et intervalles explicites, en corrigeant les biais des sources (échantillonnage, coût non attribué, couverture réseau partielle)."
+  - "Nommer les inconnues qui peuvent changer la décision et ordonner des mesures ou expériences discriminantes selon leur coût, leur durée, leur risque et l'information attendue."
+  - "Concevoir une chaîne d'ingestion, de stockage et de requêtes dont le coût reste stable et prévisible face à un disque lent, à une requête coûteuse et à +9 % de volume par mois, dans le budget mémoire actuel."
+  - "Planifier le déploiement de chaque changement avec un retour arrière vérifié en moins d'1 h et sans perte d'événement."
+deliverables:
+  - "Note d'attribution : tableau explication → part du surcoût (estimation centrale et intervalle), hypothèses de calcul, interactions entre explications, et observations qui feraient réviser l'estimation."
+  - "Requêtes SQL de diagnostic sur les tables système (parts, part_log, replication_queue, query_log corrigé de l'échantillonnage, sous-requêtes par réplica), avec leur coût mémoire borné et le résultat attendu sous chaque hypothèse."
+  - "Plan d'expériences discriminantes chiffrées (durée, coût, risque, critère de décision), dont au moins une expérience réversible limitée à un seul shard."
+  - "Conception résiliente : DDL ClickHouse (tables, politiques de stockage, TTL, profils, quotas et toute structure dérivée proposée), protections contre un disque lent et contre une requête coûteuse, modèle de coût à 6 et 12 mois."
+  - "Plan de déploiement et de rollback par étape : commande d'annulation, durée mesurée, critère d'abandon et preuve d'absence de perte."
+success_criteria:
+  - "Chaque explication reçoit une part du surcoût avec un intervalle à 80 % ; les estimations centrales somment à 14,6 k€/semaine à ±5 % ; après les expériences, l'économie mesurée tombe dans l'intervalle prédit pour au moins 3 postes de facturation sur 4 concernés."
+  - "Coût ≤ 45 € par milliard d'événements ingérés dans les 4 semaines suivant le déploiement (43,1 € en S33, 59,5 € en S39), et ≤ 45 € dans le modèle à 12 mois avec +9 %/mois."
+  - "Test d'injection : un nœud par zone bridé à 125 Mo/s pendant 72 h → ≤ 2 000 parts actives par nœud pour `game_events`, retard Kafka ≤ 60 s, trafic interserveur inter-zones ≤ 1,2 fois le nominal."
+  - "Chaque panneau de Pulse ≤ 2 Go de mémoire, ≤ 2 s au p95 et ≤ 5 000 GET S3 par exécution, avec des valeurs identiques à la requête actuelle pour le revenu (au centime) et les payeurs (à l'unité) ; pour les joueurs actifs, valeur exacte ou écart accepté par écrit par LiveOps."
+  - "Chaque étape annulée en répétition en moins d'1 h, avec un rapprochement exact, partition par partition, entre les offsets Kafka consommés et les lignes présentes dans ClickHouse."
+metadata:
+  requires_code: true
+  requires_architecture: true

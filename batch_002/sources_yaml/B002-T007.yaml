@@ -1,0 +1,137 @@
+title: "Protocole de livraison de webhooks : relances qui saturent en silence et doublons après une bascule de région"
+constraints:
+  compatibilité API stricte: "contrat webhooks v1 figé : corps JSON, en-têtes X-Event-Id et X-Signature-V1, réponse 2xx attendue sous 10 s, livraison au moins une fois avec relances pendant 72 h ; seuls des en-têtes optionnels peuvent être ajoutés ; GET /v1/deliveries (historique des tentatives exposé aux marchands) garde son schéma"
+  SLA élevé: "99,9 % des événements destinés à un endpoint sain livrés en moins de 5 min, mesuré par jour (sain : au moins 95 % de 2xx sur l'heure glissante précédente) ; bascule de région en moins de 15 min"
+  legacy non remplaçable à court terme: "Redis 6.2 (primaire unique en eu-1, réplica asynchrone en eu-2, 25 Go de mémoire au plus) et le module d'envoi webhook-sender (Java 17, Apache HttpClient 4.5 bloquant, signature) restent en place au moins 9 mois ; ni Redis Cluster ni module Redis ; un nouveau composant en Java 21 peut être ajouté à côté"
+context: |-
+  Ondalys est un prestataire de services de paiement qui notifie 22 140 endpoints marchands par webhooks : paiement autorisé, remboursement, litige, versement. Le dispatcher, un ensemble de microservices Java, effectue environ 10 000 tentatives de livraison par seconde en journée, dont 6 300 premières tentatives et 3 700 relances.
+
+  Depuis le 20 septembre 2026, rien d'anormal n'apparaît au tableau de bord : la profondeur de la file prête est stable et le retard du consommateur Kafka reste sous la seconde. Pourtant, la part des événements livrés en moins de 5 min aux endpoints sains est tombée de 99,95 % à 97,1 %. Une analyse a posteriori des sauvegardes Redis montre que le sorted set des relances est passé de 2,1 M à 41,7 M éléments en 9 jours.
+
+  Le 24 septembre, la région eu-1 a été perdue de 09:12 à 09:59 UTC. eu-2 a repris le service à 09:31 à partir d'un état Redis correspondant à 09:03:27. Environ 3,2 M webhooks ont alors été livrés deux fois, et 14 marchands qui ne dédupliquent pas ont expédié des commandes ou passé des écritures comptables en double.
+
+  Une partie de l'équipe impute la situation à Carrelune, une plateforme de places de marché dont 212 endpoints échouent depuis sa migration d'infrastructure du 21 septembre. La direction attend un protocole de livraison et de bascule qui ne change pas le contrat marchand et conserve Redis pendant les 9 prochains mois.
+existing_architecture: |-
+  - **Ingestion** : topic Kafka merchant-events de 96 partitions (clé = merchantId), répliqué vers eu-2 par MirrorMaker 2.
+  - **webhook-dispatcher (Java 17, Spring Boot 2.7)** : 48 pods en eu-1. Chaque pod consomme 2 partitions et dispose d'une file prête de 250 livraisons et de 256 threads d'envoi (webhook-sender), soit 12 288 appels simultanés au plus. Après chaque lot consommé, l'offset Kafka est écrit dans Redis, dans la même transaction MULTI que les ZADD des livraisons différées du lot.
+  - **Relances** : sorted set Redis retry:delayed (score = échéance en ms, membre = clé de livraison), sur un primaire unique en eu-1 avec un réplica asynchrone en eu-2. Chaque pod exécute un poller toutes les 100 ms. Les corps d'événements sont dans PostgreSQL.
+  - **Journal** : table PostgreSQL delivery_attempts (une ligne par tentative, ≈ 8 To sur 30 jours), servie aux marchands par GET /v1/deliveries et répliquée vers eu-2 par réplication logique asynchrone.
+  - **Bascule** : manuelle, selon un runbook : promotion du réplica Redis, démarrage des pods en eu-2, reprise de Kafka aux offsets lus dans Redis.
+  - **Supervision** : queue.ready.depth (somme des 48 files prêtes), retard Kafka, taux de 2xx global. Ni retry:delayed ni l'état de la réplication Redis ne sont suivis.
+problem: |-
+  Il faut d'abord expliquer comment la file des relances a pu croître pendant 9 jours sans qu'aucun indicateur suivi ne bouge, pourquoi des endpoints sains en pâtissent, et s'il existe un lien entre cette croissance et le point de reprise de la bascule du 24 septembre.
+
+  Il faut ensuite concevoir un protocole de livraison qui décide, sous incertitude, quand un endpoint doit être traité comme lent, momentanément indisponible ou durablement en échec, et qui répartit une capacité d'envoi bornée entre marchands. Ce protocole doit tenir le SLA des endpoints sains et la promesse de 72 h faite à tous. Il doit couvrir la bascule entre régions avec une borne explicite sur les doublons, et fonctionner avec le Redis et le module d'envoi existants.
+evidence:
+  - |-
+    Relevé quotidien à 12:00 UTC (ZCARD et ZCOUNT reconstitués depuis les fichiers RDB, absents du tableau de bord) :
+    ```text
+    Jour    queue.ready.depth   Retard Kafka   ZCARD retry:delayed   ZCOUNT échus (≤ now)   Sains livrés < 5 min
+    19/09   310 à 2 900         < 1 s          2,0 M                 0,01 M                 99,96 %
+    20/09   420 à 3 400         < 1 s          2,1 M                 0,01 M                 99,95 %
+    22/09   10 400 à 12 000     < 1 s          4,6 M                 0,3 M                  99,71 %
+    24/09   11 000 à 12 000     < 1 s          12,8 M                1,9 M                  98,90 %
+    26/09   11 000 à 12 000     < 1 s          25,1 M                4,2 M                  97,80 %
+    28/09   11 000 à 12 000     < 1 s          37,2 M                6,4 M                  97,10 %
+    29/09   11 000 à 12 000     < 1 s          41,7 M                6,9 M                  —
+    Compteur delivery.deferred (existant, non affiché) : 0 à 40/s jusqu'au 21/09, 2 100 à 2 600/s depuis le 23/09
+    Redis used_memory : 1,6 Go le 19/09, 7,1 Go le 29/09
+    ```
+  - |-
+    Extraits du dispatcher (version 3.8) :
+    ```java
+    // LaneWorker.java — une instance par pod
+    final class LaneWorker {
+        private static final String DELAYED = "retry:delayed";
+        private static final long BASE_DELAY_MS = 5_000, MAX_DELAY_MS = 6 * 3_600_000L;
+        private static final Duration MAX_AGE = Duration.ofHours(72);
+        private final BlockingQueue<Delivery> ready = new ArrayBlockingQueue<>(250);
+        private final ExecutorService senders = Executors.newFixedThreadPool(256);
+
+        void submit(Delivery d) {
+            if (!ready.offer(d)) {
+                redis.zadd(DELAYED, clock.millis() + 2_000, d.key());
+                metrics.counter("delivery.deferred").increment();
+            }
+        }
+
+        void onFailure(Delivery d, Outcome o) {
+            if (clock.instant().isAfter(d.createdAt().plus(MAX_AGE))) { deadLetters.publish(d, o); return; }
+            int attempt = d.attempt() + 1;
+            long delay = Math.min(BASE_DELAY_MS * (1L << attempt), MAX_DELAY_MS) + jitter(0.2);
+            redis.zadd(DELAYED, clock.millis() + delay, d.withAttempt(attempt).key());
+        }
+    }
+
+    // DelayedPoller.java — une instance par pod, qui ne traite que ses 2 partitions
+    @Scheduled(fixedDelay = 100)
+    void drain() {
+        for (String key : redis.zrangeByScore(DELAYED, 0, clock.millis(), 0, 2_000)) {
+            if (!ownership.owns(DeliveryKey.partition(key))) continue;
+            if (redis.zrem(DELAYED, key) == 1) lane.submit(deliveries.load(key));   // corps lu dans PostgreSQL
+        }
+    }
+    ```
+  - |-
+    Tentatives par catégorie d'endpoint, le 28/09 de 12:00 à 13:00 UTC (moyennes) :
+    ```text
+    Catégorie                  Endpoints   Tentatives/s   dont relances   Latence moyenne   Succès
+    Sains                      19 930      5 760          90              0,24 s            99,3 %
+    Lents (p50 > 8 s)          1 900       690            210             8,2 s             64 %
+    Moins de 5 % de succès     310         3 550          3 400           1,45 s            1,1 %
+    Total                      22 140      10 000         3 700
+    ```
+    Les 310 endpoints de la dernière ligne portent 88 % des éléments de retry:delayed, jusqu'à 412 000 pour un seul endpoint. Un événement destiné à un endpoint qui échoue toujours reçoit environ 23 tentatives en 72 h. Threads d'envoi occupés : 44 pods à 100 %, 4 pods entre 78 % et 97 %.
+  - |-
+    Historique de quelques endpoints sur les 72 dernières heures :
+    ```text
+    ep-40117  Carrelune (1 des 212)   TLS handshake_failure depuis le 21/09 17:40, aucun succès ; aucune date de retour annoncée
+    ep-11873  Fromagerie Vasseur      503 de 01:00 à 04:30 chaque nuit, 99,8 % de succès le reste du temps
+    ep-20954  Ludinéo                 p50 9,1 s, 38 % de timeouts, chaque événement livré au 2e ou au 3e essai
+    ep-07731  Atelier Bruneau         410 Gone depuis le 12/09, abonnement toujours actif
+    ep-15602  Voyages Kerlan          aucun succès de 02:10 à 02:55 le 27/09, puis 97 %
+    ```
+  - |-
+    Primaire Redis en eu-1 (client-output-buffer-limit replica 256mb 64mb 60 ; repl-backlog-size 64mb) et chronologie du 24/09 :
+    ```text
+    41:M 24 Sep 2026 09:06:04.114 # Client id=88213 addr=10.8.2.14:41822 flags=S omem=268437504 cmd=psync scheduled to be closed ASAP for overcoming of output buffer limits.
+    41:M 24 Sep 2026 09:06:04.201 # Connection with replica 10.8.2.14:6379 lost.
+    41:M 24 Sep 2026 09:06:18.882 * Replica 10.8.2.14:6379 asks for synchronization
+    41:M 24 Sep 2026 09:06:18.882 * Unable to partial resync with replica 10.8.2.14:6379 for lack of backlog (Replica request was: 918224177365).
+    41:M 24 Sep 2026 09:06:18.883 * Starting BGSAVE for SYNC with target: disk
+    41:M 24 Sep 2026 09:11:52.610 * Background saving terminated with success
+    ```
+    La même séquence (déconnexion puis resynchronisation complète de 7 à 14 min) apparaît 11 fois depuis le 21/09. Chronologie UTC : 09:12:03 perte de eu-1 ; 09:24 décision de bascule ; 09:31 réplica promu, 48 pods démarrés en eu-2, dernier offset Kafka lu dans Redis daté de 09:03:27 ; 09:57 pods de eu-1 mis à l'échelle zéro à la main ; 09:59 retour de eu-1. Doublons : ≈ 3,2 M livraisons dont le X-Event-Id avait déjà un 2xx dans delivery_attempts. Retard de la réplication PostgreSQL vers eu-2 au moment de la panne : non collecté.
+  - |-
+    Contrat webhooks v1 (publié en 2021) et enquête marchands :
+    ```text
+    - POST JSON ; en-têtes obligatoires X-Event-Id (UUIDv4) et
+      X-Signature-V1 = HMAC-SHA256(secret du marchand, X-Event-Id + "." + corps)
+    - réponse 2xx attendue sous 10 s ; tout autre code, ou le dépassement du délai, vaut échec
+    - livraison au moins une fois, relances pendant 72 h, aucun ordre garanti ;
+      le marchand doit dédupliquer sur X-Event-Id
+    - ajout d'en-têtes optionnels autorisé ; les SDK marchands (Java, PHP, Node) ignorent les en-têtes inconnus
+    Enquête du 25/09 : 14 marchands ne dédupliquent pas (9 ont expédié des commandes en double,
+    5 ont doublé des écritures comptables). Aucune mesure n'existe de la dépendance réelle des
+    marchands à l'ordre des événements.
+    ```
+objectives:
+  - "Expliquer, chiffres à l'appui, la croissance silencieuse de retry:delayed, la dégradation du SLA des endpoints sains et le point de reprise de la bascule du 24/09, en séparant faits, hypothèses et inconnues."
+  - "Formuler l'allocation de la capacité d'envoi comme un problème d'optimisation sous contraintes, avec une règle explicite de classement d'un endpoint sous incertitude et le coût de chaque type d'erreur de classement."
+  - "Spécifier un protocole de livraison et de bascule compatible avec le contrat v1 et le legacy, avec des bornes explicites sur les doublons et les pertes."
+  - "Définir comment résorber le stock actuel de 41,7 M éléments sans rompre la promesse de 72 h ni dégrader davantage les endpoints sains."
+deliverables:
+  - "Note de diagnostic : mécanismes, calculs de capacité établis à partir des mesures fournies, hypothèses examinées avec un verdict chiffré pour chacune (dont celle qui impute tout à Carrelune) et mesures manquantes."
+  - "Spécification du protocole : états d'un endpoint et transitions avec leurs seuils, ordonnancement des envois et des relances, en-têtes optionnels éventuels, procédure de bascule entre régions (état répliqué, protection contre le retour de l'ancienne région, reprise), invariants et borne de doublons."
+  - "Formulation d'optimisation (variables, objectif, contraintes) et politique de décision sous incertitude, avec une analyse de sensibilité aux paramètres inconnus."
+  - "Code Java 21 du cœur de l'ordonnanceur, intégré au Redis et au webhook-sender existants, avec tests unitaires et une simulation à événements discrets qui rejoue le profil du 20 au 29 septembre et une perte de région à un instant quelconque."
+  - "Liste des métriques et alertes à ajouter, et runbook de bascule révisé."
+success_criteria:
+  - "Simulation du profil du 28/09 avec 12 288 appels simultanés : au moins 99,9 % des événements destinés aux endpoints sains livrés en moins de 5 min, globalement et sur chacun des 48 pods."
+  - "Les endpoints en échec persistant consomment au plus 5 % de la capacité d'envoi ; quand l'un d'eux redevient disponible, son premier événement en attente part en moins de 5 min et tout événement dont l'échéance de 72 h tombe plus de 5 min après la reprise est livré avant cette échéance."
+  - "Pire cas simulé (310 endpoints en échec pendant 72 h au débit du 28/09) : mémoire Redis ≤ 10 Go et aucune perte de synchronisation du réplica."
+  - "Perte de eu-1 simulée à 50 instants aléatoires : aucun événement perdu, doublons limités à 5 s de livraisons réussies (≈ 31 000), service rétabli en moins de 15 min et aucun envoi depuis l'ancienne région après la bascule."
+  - "Contrat v1 inchangé, vérifié par les tests de conformité des SDK Java, PHP et Node ; une croissance de retry:delayed comparable à celle du 20 au 29/09 déclenche une alerte en moins de 15 min."
+metadata:
+  requires_code: true
+  requires_architecture: true

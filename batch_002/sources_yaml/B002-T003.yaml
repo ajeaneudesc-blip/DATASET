@@ -1,0 +1,130 @@
+title: "Feature flags en JavaScript edge : expériences faussées et isolates saturés pendant une migration par PoP"
+constraints:
+  faible consommation mémoire: "tas plafonné à 128 Mo par isolate par la plateforme ; objectif ≤ 40 Mo pour la configuration chargée du plus gros tenant (t-0193 : 14 200 règles, 2,1 M valeurs distinctes) et ≤ 64 Mo pour l'ensemble des configurations d'un isolate ; ni WebAssembly ni module natif"
+  déploiement progressif: "paliers de 1 %, 10 %, 50 % puis 100 % des 312 PoP, chacun tenu au moins 24 h ; passage au palier suivant seulement si aucune expérience active n'est en SRM du fait de la version (p > 0,001) et si les évictions d'isolates restent ≤ 0,5 par PoP et par heure"
+  rollback obligatoire: "retour à l'évaluateur précédent sur tous les PoP d'un palier en ≤ 15 min, sans republier les configurations des tenants et sans réaffecter un utilisateur déjà exposé à une expérience en cours, sauf expérience explicitement invalidée par son propriétaire"
+context: |-
+  Aiguilla édite une plateforme SaaS de feature flags et d'expérimentation A/B utilisée par 1 900 tenants. Les SDK de leurs applications (web, iOS, Android, serveurs) appellent un service d'évaluation exécuté en fonctions edge dans 312 PoP, soit environ 100 000 requêtes/s en pointe. Chaque requête renvoie, pour un utilisateur donné, la variante de chacun des flags du tenant. Chaque évaluation d'un flag d'expérience émet un événement d'exposition ; l'entrepôt en conserve environ 115 To sur 90 jours.
+
+  Le plus gros tenant, t-0193 (une plateforme de streaming), compte 2 300 flags, 14 200 règles de ciblage et des listes d'identifiants qui totalisent 2,1 M valeurs distinctes. Avec l'évaluateur v1, son CPU d'évaluation atteint 7,8 ms au p99, pour un budget de 10 ms par requête. Ses règles croissent de 6 % par mois : le budget serait épuisé vers février 2027. L'évaluateur v2 a été écrit pour cette raison : il compile les règles en index de bitsets par attribut et par valeur.
+
+  v2 a été activé PoP par PoP : 1 % le 21/09, 10 % le 22/09, 50 % le 23/09 (156 PoP, 29 % du trafic). Le 25/09, l'équipe data de t-0193 a signalé un déséquilibre d'échantillon sur son test de tunnel de paiement, et le déploiement a été gelé. Au 28/09, trois expériences de deux tenants sont en Sample Ratio Mismatch. Des utilisateurs affirment avoir vu les deux versions d'un même écran. Enfin, les isolates des PoP v2 sont évincés près de 50 fois plus souvent qu'avant.
+
+  L'équipe plateforme compte quatre ingénieurs. Tu prends en charge l'analyse, le choix de stratégie et l'implémentation.
+existing_architecture: |-
+  - **Plan de contrôle (Node.js 20)** : chaque publication d'un tenant crée une version de configuration immuable (`cfg`). Pendant la migration, `compiler/` en tire deux artefacts : format 1 (règles JSON ; listes de plus de 64 valeurs stockées en hachages 64 bits triés dans des Uint32Array) et format 2 (index compilé), poussés dans le KV global de la plateforme (propagation ≤ 60 s).
+  - **Fonctions edge** : JavaScript ES2022 dans des isolates V8 ; 128 Mo de tas par isolate, 10 ms de CPU par requête, 500 ms pour le premier chargement d'un artefact. Les artefacts de plusieurs tenants partagent un cache LRU ; un isolate qui dépasse son plafond est évincé.
+  - **Affectation** : `edge/bucketing.js`, commun aux deux versions, calcule `murmur3_32(salt:key) % 10000`. Rien n'est stocké : la stabilité repose sur le déterminisme (même `cfg`, même clé, même variante).
+  - **Contrat produit** : les règles d'un flag s'appliquent dans l'ordre affiché dans la console ; la première satisfaite décide, sinon la règle par défaut.
+  - **Routage** : anycast ; version d'évaluateur fixée par PoP (propagation ≈ 5 min). En une semaine, 6,8 % des utilisateurs actifs de t-0193 passent par au moins deux PoP.
+  - **Statistiques** : une exposition porte tenant, flag, `cfg`, clé, variante, indice de règle, PoP et version d'évaluateur. Un test χ² quotidien signale le SRM (p < 0,001) ; l'analyse exclut les utilisateurs ayant reçu plus d'une variante.
+problem: |-
+  Trois phénomènes se superposent depuis que les deux évaluateurs cohabitent : le déséquilibre d'échantillon, les utilisateurs exposés à plusieurs variantes et la saturation mémoire des isolates v2. Il faut relier chacun à un mécanisme démontré par les preuves. Il faut aussi mesurer l'étendue réelle : quels flags, tenants et utilisateurs ont reçu un résultat différent selon la version, bien au-delà des trois expériences signalées.
+
+  Il faut ensuite retenir une stratégie d'évaluation qui tienne à la fois le budget CPU, le budget mémoire et le contrat produit, puis la coder en JavaScript sur plusieurs modules. Enfin, il faut sortir de l'état mixte actuel (156 PoP en v2) par un chemin de déploiement et de retour arrière qui ne réaffecte pas les utilisateurs déjà exposés.
+evidence:
+  - |-
+    Expériences actives du 23/09 au 29/09 : utilisateurs uniques par population de PoP, p du test χ² de SRM, et entre parenthèses les utilisateurs multi-variantes :
+    ```text
+    Expérience (tenant)          Allocation   v1 seul              v2 seul              v1 et v2
+    exp-checkout-v7 (t-0193)     50/50        2 959 711 · p=0,49   1 122 649 · p<1e-6   117 640 · p<1e-6 (1 906)
+    exp-reco-carousel (t-0193)   34/33/33     1 761 742 · p=0,72     668 251 · p<1e-6    70 007 · p<1e-6 (2 065)
+    exp-trial-length (t-0877)    80/20          388 150 · p=0,31     146 077 · p<1e-6    21 930 · p<1e-6 (1 206)
+    exp-search-v12 (t-0193)      50/50        2 572 105 · p=0,58     975 695 · p=0,44   102 200 · p=0,61 (4)
+    ```
+    Part « contrôle » de exp-checkout-v7 : 50,02 % (v1 seul), 51,62 % (v2 seul), 50,82 % (v1 et v2, après exclusion des multi-variantes). Avant le 21/09, 0,004 % des utilisateurs exposés recevaient plus d'une variante, à cause des changements de configuration.
+  - |-
+    Expositions brutes de deux utilisateurs multi-variantes :
+    ```text
+    2026-09-24T08:12:41.207Z pop=CDG3 eval=v1 t=t-0193 flag=exp-checkout-v7 cfg=4412 key=u_7f3a91 variant=treatment rule=0
+    2026-09-24T19:40:05.913Z pop=MRS1 eval=v2 t=t-0193 flag=exp-checkout-v7 cfg=4412 key=u_7f3a91 variant=control rule=2
+    2026-09-25T07:55:13.022Z pop=CDG3 eval=v1 t=t-0193 flag=exp-checkout-v7 cfg=4412 key=u_7f3a91 variant=treatment rule=0
+    2026-09-26T12:03:44.480Z pop=FRA2 eval=v2 t=t-0877 flag=exp-trial-length cfg=918 key=acc_20931 variant=trial_30d rule=1
+    2026-09-26T12:09:02.117Z pop=AMS1 eval=v1 t=t-0877 flag=exp-trial-length cfg=918 key=acc_20931 variant=trial_14d rule=0
+    ```
+  - "Analyse de l'équipe data (28/09) sur les 5 177 utilisateurs multi-variantes des trois expériences en SRM : 71 % utilisent le SDK Android 5.2, publié le 14/09, qui modifie le cache local des variantes (38 % des exposés) ; 44 % sont passés par au moins trois PoP (1,9 % des exposés) ; 99,2 % satisfont au moins deux règles du flag concerné, réévaluées hors ligne sur la même cfg (6,1 % des exposés) ; 98,8 % ont des expositions divergentes portant la même cfg. L'équipe mobile soupçonne le SDK Android 5.2. Par ailleurs, bucketing.js a été réécrit pendant le projet v2 (portage de murmur3 avec Math.imul) et sert aux deux versions depuis le 15/09 ; comparé à l'ancien sur 10 M clés, il donne des seaux identiques."
+  - |-
+    Extraits de code (v2.3.0) :
+    ```javascript
+    // compiler/compile.js — exécuté par le plan de contrôle à chaque publication
+    import { AttributeIndex } from './attribute-index.js';
+    import { isIndexable } from './ops.js';
+
+    export function compileFlag(flag) {
+      const rules = flag.rules
+        .map((rule, srcIndex) => ({ ...rule, srcIndex, arity: rule.clauses.length }))
+        // Règles les plus sélectives d'abord : moins de clauses résiduelles évaluées
+        // avant la sortie anticipée (banc t-0193 : -37 % de CPU d'évaluation).
+        .sort((a, b) => b.arity - a.arity);
+      const index = new AttributeIndex(rules.length);
+      const residual = rules.map(() => []);
+      rules.forEach((rule, ord) => {
+        for (const c of rule.clauses) {
+          if (isIndexable(c.op)) index.add(c.attr, c.values, ord, c.negate === true);
+          else residual[ord].push(c);
+        }
+      });
+      return { key: flag.key, salt: flag.salt, index: index.freeze(), residual,
+               serves: rules.map((r) => r.serve), srcIndex: rules.map((r) => r.srcIndex),
+               fallthrough: flag.fallthrough, format: 2 };
+    }
+
+    // edge/evaluate-v2.js
+    export function evaluateFlag(cf, ctx) {
+      const cand = cf.index.candidates(ctx); // Uint32Array : bit ord à 1 si les clauses indexées de la règle sont satisfaites
+      for (let w = 0; w < cand.length; w++) {
+        for (let word = cand[w]; word !== 0; word &= word - 1) {
+          const ord = (w << 5) | (31 - Math.clz32(word & -word));
+          if (cf.residual[ord].every((c) => matchClause(c, ctx))) {
+            return serve(cf.salt, cf.serves[ord], ctx, cf.srcIndex[ord]);
+          }
+        }
+      }
+      return serve(cf.salt, cf.fallthrough, ctx, -1);
+    }
+
+    // edge/evaluate-v1.js
+    export function evaluateFlag(flag, ctx) {
+      for (let i = 0; i < flag.rules.length; i++) {
+        if (flag.rules[i].clauses.every((c) => matchClause(c, ctx))) {
+          return serve(flag.salt, flag.rules[i].serve, ctx, i);
+        }
+      }
+      return serve(flag.salt, flag.fallthrough, ctx, -1);
+    }
+    ```
+  - |-
+    Mesures pour le tenant t-0193 (cfg 4412, du 26 au 28/09) :
+    ```text
+    Mesure                                         PoP v1          PoP v2
+    Artefact de configuration                      25 Mo           71 Mo
+    CPU de chargement dans un isolate              58 ms           412 ms
+    Tas retenu après chargement                    36 Mo           118 Mo
+    CPU d'évaluation par requête, p50 / p99        1,9 / 7,8 ms    0,6 / 2,1 ms
+    Requêtes rejetées (> 10 ms de CPU)             0,04 %          0 %
+    Évictions d'isolates par PoP et par heure      0,3             14,6
+    Requêtes servies par un isolate froid          0,02 %          0,41 %
+    Latence de bout en bout p99 / p99,9            24 / 41 ms      27 / 455 ms
+    ```
+    Instantané de tas v2 après chargement de t-0193 (2,1 M valeurs distinctes, 2,6 M occurrences flag × attribut × valeur) : (string) 2 184 551 objets, 49,7 Mo ; Map 2 318 objets, 31,4 Mo ; Uint32Array 2 318 objets, 12,4 Mo ; Array 214 880 objets, 15,9 Mo ; Object 198 402 objets, 6,2 Mo ; autres 2,6 Mo. Instantané v1 : Uint32Array des hachages triés 20,8 Mo ; objets des règles 9,1 Mo ; chaînes 3,9 Mo ; autres 2,2 Mo.
+  - "Informations non disponibles : la politique d'éviction exacte de la plateforme (seuil, délai de grâce, prise en compte des isolates concurrents d'un même PoP) n'est pas documentée ; on ignore si des tenants ont modifié leurs règles depuis le 23/09 en réaction aux résultats observés ; la part des SDK clients qui mettent les variantes en cache local, et masquent ainsi une partie des changements vus par l'utilisateur, n'est pas mesurée."
+objectives:
+  - "Expliquer, preuves à l'appui, le SRM, les utilisateurs multi-variantes et la pression mémoire des isolates v2, en séparant faits établis, hypothèses et inconnues."
+  - "Recenser tous les flags, tenants et utilisateurs dont le résultat a dépendu de la version d'évaluateur depuis le 21/09."
+  - "Choisir, parmi au moins trois stratégies d'évaluation, celle qui respecte à la fois le contrat produit, le budget CPU et le budget mémoire, y compris avec un doublement des règles."
+  - "Définir la sortie de l'état mixte (poursuite du déploiement ou retour arrière) sans réaffecter d'utilisateur déjà exposé, et décider du sort des trois expériences touchées."
+deliverables:
+  - "Note de diagnostic : mécanisme de chaque phénomène, hypothèses concurrentes examinées (SDK Android 5.2, bucketing, propagation des configurations), chacune confirmée ou réfutée par les preuves, inconnues, et méthode de recensement des flags touchés sur tous les tenants avec son coût de calcul."
+  - "Comparaison d'au moins trois stratégies d'évaluation (par exemple parcours séquentiel optimisé, index inversé, structure de décision partagée, compilation paresseuse) : complexité en temps et en mémoire, mesures sur t-0193 et sur un jeu de règles doublé, coût de chargement, choix argumenté."
+  - "Implémentation JavaScript multi-fichiers : compiler/ (compilation et sérialisation), edge/evaluate.js, edge/bucketing.js et edge/migration-shim.js (choix de version par PoP, lecture des deux formats d'artefact), avec des représentations mémoire justifiées pour V8."
+  - "Tests : équivalence différentielle entre v1 et le nouvel évaluateur (propriétés sur des règles générées qui se chevauchent, rejeu de contextes réels), tests du bucketing, bancs de mémoire et de CPU exécutés sous les plafonds de l'isolate."
+  - "Plan de migration et de retour arrière à partir de l'état actuel : traitement des utilisateurs déjà exposés à des variantes divergentes, décision sur les trois expériences, critères de passage de palier et d'arrêt, durée."
+success_criteria:
+  - "Équivalence : aucun écart de variante ni d'indice de règle source avec v1 sur le rejeu de 50 M contextes réels (7 jours, 20 plus gros tenants) et sur 10 M cas générés adverses (règles qui se chevauchent, négations, listes de plus de 100 000 valeurs)."
+  - "t-0193 : configuration chargée ≤ 40 Mo de tas, chargement ≤ 120 ms de CPU, évaluation ≤ 3 ms de CPU au p99, et ≤ 5 ms au p99 avec un jeu de règles synthétique doublé."
+  - "À chaque palier : aucune expérience active en SRM attribuable à la version (p > 0,001 par population v1 et v2), utilisateurs multi-variantes ≤ 0,005 %, évictions ≤ 0,5 par PoP et par heure."
+  - "Répétition de retour arrière sur 3 PoP : retour complet en ≤ 15 min et aucun utilisateur déjà exposé réaffecté dans les 48 h suivantes (mesuré sur les expositions), hors expériences invalidées par leur propriétaire."
+  - "Recensement reproductible par script : il attribue une cause à chacun des 5 177 utilisateurs multi-variantes connus (version d'évaluateur, changement de cfg ou autre) et chiffre, flag par flag et pour tous les tenants, les utilisateurs dont la variante a dépendu de la version."
+metadata:
+  requires_code: true
+  requires_architecture: true
