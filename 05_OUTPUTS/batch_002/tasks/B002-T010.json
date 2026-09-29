@@ -35,7 +35,7 @@
   "deliverables": [
     "Architecture cible : ports et adaptateurs (candidats, features, runtime de modèles, règles éditoriales, audit, temps), comportement dégradé de chaque adaptateur, topologie et dimensionnement, décisions argumentées sur ce qui est repris du PoC.",
     "Diagnostic des blocages à partir des dumps et du code, puis modèle de concurrence cible : chemin de requête, publication et retrait des bundles et des règles, libération des anciennes versions, argument écrit d'absence d'interblocage et de famine.",
-    "Modèle du temps et conception du journal d'audit : horloges utilisées pour les TTL, l'embargo et l'audit, réaction à une dérive ou un saut détecté, ordre vérifiable entre VM, format et taille d'une entrée, chaînage, procédure de justification, coût de rétention sur 13 mois.",
+    "Modèle du temps et conception du journal d'audit : horloges utilisées pour les TTL, l'embargo et l'audit, réaction à une dérive ou un saut détecté, ordre vérifiable entre VM, format et taille d'une entrée, mécanisme rendant le journal infalsifiable, procédure de justification, coût de rétention sur 13 mois.",
     "Squelette C++20 compilable (chemin de requête, rechargement, adaptateur d'audit, port Temps) et plan de tests : ThreadSanitizer, endurance avec rechargements forcés, injection de sauts et de dérives d'horloge, rejeu du journal.",
     "Modèle de coût mensuel et budget CPU de l'observabilité, avec au moins deux options de réduction du coût du reranker (précision, nombre de candidats, cascade) et le protocole qui mesure leur effet sur la qualité et sur le pluralisme."
   ],

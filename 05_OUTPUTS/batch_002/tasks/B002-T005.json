@@ -42,7 +42,7 @@
   "success_criteria": [
     "Après réparation, aucune divergence sémantique entre régions sur 100 % des blocs écrits depuis le 09/09 (2 h et 24 h), vérifiée par la nouvelle anti-entropie et non par échantillon.",
     "Tests de propriété : 10^8 séquences générées, incluant toutes les bornes de seau et des écarts jusqu'aux limites de i32, sans aucun écart d'aller-retour sur x86_64 comme sur aarch64 ; le bloc s-40117 réparé se décode à l'identique de sa copie us-east.",
-    "Encodeur corrigé ≥ 14 M points/s sur x86_64 au benchmark actuel, surcoût de la vérification intégrée ≤ 5 %, import de référence ≤ 7 min 30 s.",
+    "Encodeur corrigé, vérification intégrée comprise, ≥ 14 M points/s sur x86_64 au benchmark actuel ; surcoût de cette vérification ≤ 5 % ; import de référence ≤ 7 min 45 s.",
     "Anti-entropie sémantique : 100 % des blocs scellés couverts, alerte moins de 3 h après l'écriture d'un bloc divergent, aucun faux positif sur 7 jours malgré des encodages différents, ≤ 5 % d'un vCPU par région en moyenne.",
     "Compaction d'un volume synthétique 5,4 fois supérieur à celui du 28/09 en ≤ 2 h sur le matériel actuel."
   ],
