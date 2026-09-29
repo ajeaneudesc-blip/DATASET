@@ -30,8 +30,10 @@ metadata{
   solution_included   toujours false
 }
 
-Les combinaisons incohérentes (ex. incident « dérive de modèle ML » sur une tâche
-Problem Solving, Bash pour du deep learning) sont définies dans
-`02_TAXONOMY/compatibility.json`.
+Les combinaisons incohérentes (ex. incident « dérive de modèle ML » ou failure mode
+« checkpoint corrompu ou incomplet » sur une tâche Problem Solving, Bash pour du
+deep learning) sont définies dans `02_TAXONOMY/compatibility.json`. Les incidents et
+failure modes propres au ML (leakage, écart training/serving, calibration,
+contamination d'évaluation, worker GPU, feature store…) sont réservés à la piste ML.
 
 Vérification automatique : `python 07_SCRIPTS/validate_tasks.py --kind task <fichier|dossier>`.

@@ -63,6 +63,7 @@ def draw_card(rng, tax, track, usage, slack=0):
         language = pick(languages, "language")
 
     incidents = [i for i in tax.incidents if tax.incident_ok(i, track, language)]
+    failures = [f for f in tax.failures if tax.failure_ok(f, track)]
     pool = list(tax.constraints)
     constraints = []
     for _ in range(CONSTRAINTS_PER_TASK):
@@ -78,7 +79,7 @@ def draw_card(rng, tax, track, usage, slack=0):
         "load_level": pick(list(tax.loads), "load_level"),
         "architecture_style": pick(tax.architectures, "architecture_style"),
         "incident_type": pick(incidents, "incident_type"),
-        "failure_mode": pick(tax.failures, "failure_mode"),
+        "failure_mode": pick(failures, "failure_mode"),
         "task_mode": pick(tax.modes, "task_mode"),
         "constraints": constraints,
     }

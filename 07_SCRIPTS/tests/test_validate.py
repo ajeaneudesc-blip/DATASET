@@ -32,6 +32,12 @@ class TacheTest(unittest.TestCase):
         rep = check([make_task(3, domain="deep learning", language="Bash")], single=True)
         self.assertTrue(any("incohérent avec le domaine" in e for e in rep.errors), rep.errors)
 
+    def test_failure_mode_reserve_au_ml(self):
+        rep = check([make_task(0, failure_mode="checkpoint corrompu ou incomplet")], single=True)
+        self.assertTrue(any("réservé à une autre piste" in e for e in rep.errors), rep.errors)
+        rep = check([make_task(3, failure_mode="checkpoint corrompu ou incomplet")], single=True)
+        self.assertEqual(rep.errors, [])
+
     def test_fuite_de_solution_signalee(self):
         task = make_task(0, problem=make_task(0)["problem"] + " La cause racine est le cache.")
         rep = check([task], single=True)

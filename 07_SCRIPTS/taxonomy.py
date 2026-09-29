@@ -89,6 +89,7 @@ class Taxonomy:
         compat = load("compatibility.json")
         self.incident_tracks = compat.get("incident_allowed_tracks", {})
         self.incident_excluded_languages = compat.get("incident_excluded_languages", {})
+        self.failure_tracks = compat.get("failure_allowed_tracks", {})
         self.language_domains = compat.get("language_allowed_domains", {})
         self.domain_languages = compat.get("domain_allowed_languages", {})
         self.language_preference = compat.get("track_language_preference", {})
@@ -111,6 +112,10 @@ class Taxonomy:
         excluded = self.incident_excluded_languages.get(incident, [])
         return (allowed is None or track in allowed) and language not in excluded
 
+    def failure_ok(self, failure, track):
+        allowed = self.failure_tracks.get(failure)
+        return allowed is None or track in allowed
+
     def self_check(self):
         """Vérifie que compatibility.json ne référence que des valeurs existantes."""
         errors = []
@@ -123,6 +128,10 @@ class Taxonomy:
             if incident not in self.incidents:
                 errors.append(f"compatibility.json: incident inconnu « {incident} »")
             errors += [f"compatibility.json: langage inconnu « {l} »" for l in languages if l not in self.languages]
+        for failure, tracks in self.failure_tracks.items():
+            if failure not in self.failures:
+                errors.append(f"compatibility.json: failure mode inconnu « {failure} »")
+            errors += [f"compatibility.json: piste inconnue « {t} »" for t in tracks if t not in TRACKS]
         for language, domains in self.language_domains.items():
             if language not in self.languages:
                 errors.append(f"compatibility.json: langage inconnu « {language} »")

@@ -125,6 +125,8 @@ def check_axes(item, where, tax, rep):
         rep.error(where, f"langage « {item.get('language')} » incohérent avec le domaine « {domain} »")
     if not tax.incident_ok(item.get("incident_type"), track, item.get("language")):
         rep.error(where, f"incident « {item.get('incident_type')} » incohérent avec {track} / {item.get('language')}")
+    if not tax.failure_ok(item.get("failure_mode"), track):
+        rep.error(where, f"failure mode « {item.get('failure_mode')} » réservé à une autre piste que {track}")
 
     constraints = item.get("constraints")
     if not isinstance(constraints, list) or not all(isinstance(c, str) and c.strip() for c in constraints):

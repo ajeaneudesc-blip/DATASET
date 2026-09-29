@@ -32,6 +32,13 @@ class TaxonomyTest(unittest.TestCase):
         self.assertFalse(self.tax.incident_ok("dérive de modèle ML", "problem_solving"))
         self.assertTrue(self.tax.incident_ok("dérive de modèle ML", "machine_learning"))
         self.assertFalse(self.tax.incident_ok("garbage collector en surcharge", "problem_solving", "Rust"))
+        self.assertFalse(self.tax.incident_ok("écart training/serving", "problem_solving"))
+        self.assertFalse(self.tax.incident_ok("divergence ou instabilité d'entraînement", "machine_learning", "SQL"))
+
+    def test_failure_mode_et_piste(self):
+        self.assertTrue(self.tax.failure_ok("partition réseau", "problem_solving"))
+        self.assertFalse(self.tax.failure_ok("checkpoint corrompu ou incomplet", "problem_solving"))
+        self.assertTrue(self.tax.failure_ok("checkpoint corrompu ou incomplet", "machine_learning"))
 
     def test_lots_du_dataset_sans_le_lot_courant(self):
         with tempfile.TemporaryDirectory() as root:
