@@ -35,7 +35,7 @@
   "deliverables": [
     "Analyse de l'expérience : facteurs de confusion identifiés et chiffrés, estimation de l'effet de l'encodeur débarrassé de chacun d'eux ou démonstration qu'elle n'est pas possible avec les données actuelles, réponse argumentée au produit sur l'arrêt de la migration.",
     "Contrat de schéma : politique de compatibilité du registre, modèles de message typés côté consommateur, tests de contrat exécutés en CI chez le producteur et chez les consommateurs, procédure d'évolution (ajout, renommage, changement de type), plan pour les consommateurs sans propriétaire.",
-    "Backfill idempotent en Python : sélection des offres à ré-embarquer, versionnement des vecteurs (encodeur, schéma, empreinte du texte), ordre vis-à-vis des mises à jour en direct, limitation du débit d'écriture dans l'index, reprise après interruption ; code et tests (pytest, tests de propriété).",
+    "Backfill idempotent en Python : sélection des offres à ré-embarquer, versionnement des vecteurs, ordre vis-à-vis des mises à jour en direct, limitation du débit d'écriture dans l'index, reprise après interruption ; code et tests (pytest, tests de propriété).",
     "Protocole de la nouvelle expérience : unité de randomisation, métrique primaire et garde-fous, durée et effet minimal détectable, segments préenregistrés, règle de décision écrite avant le démarrage, traitement des incidents survenant pendant l'expérience.",
     "Plan de migration progressive : paliers et critères d'arrêt, reconstruction et bascule d'index à chaud, retour arrière en moins de 5 min, comportement en cas de perte d'une zone, charge de travail estimée pour l'équipe."
   ],
@@ -43,7 +43,7 @@
     "Après correction, dans chaque index et pour chaque source d'offres, la médiane des tokens embarqués s'écarte de moins de 10 % de celle des vecteurs v1 antérieurs au 03/09 pour la même source, et un contrôle quotidien automatisé alerte au-delà de ce seuil.",
     "Le backfill respecte en permanence un p99 ANN ≤ 35 ms et un p99 de bout en bout ≤ 120 ms sur la capacité GPU existante ; exécuté deux fois, ou interrompu puis repris, il produit les mêmes vecteurs et n'écrase aucune mise à jour plus récente (tests automatisés).",
     "Un changement de schéma incompatible sur un champ lu par un consommateur (renommage, changement de type) est bloqué en CI avant publication, démontré par un test rejouant le cas du 03/09.",
-    "La nouvelle expérience a une règle de décision écrite avant son lancement, une puissance ≥ 80 % pour un effet de ±1 % sur le taux de candidature et des garde-fous par marché ; un incident simulé (perte d'une zone) pendant l'expérience apparaît dans les données d'analyse au niveau de la session, sans intervention manuelle.",
+    "La nouvelle expérience a une règle de décision écrite avant son lancement, une puissance ≥ 80 % pour un effet relatif de ±1 % sur le taux de candidature et des garde-fous par marché ; un incident simulé (perte d'une zone) pendant l'expérience apparaît dans les données d'analyse au niveau de la session, sans intervention manuelle.",
     "À chaque palier, un exercice de retour à l'état précédent aboutit en moins de 5 min sans erreur visible pour les utilisateurs ; une perte de zone simulée, suivie de la reconstruction des shards concernés, ne fait baisser à aucun moment le recall@100 des requêtes touchées de plus d'un point."
   ],
   "metadata": {
